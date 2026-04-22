@@ -37,9 +37,10 @@ const createExpense = async (req, res) => {
         const allParticipants = [paidBy, ...cleanedParticipants];
 
         for (const userId of allParticipants) {
+            const isPaid = userId === paidBy;
             await client.query(
-                'INSERT INTO expense_participants (expense_id, user_id, amount_owed) VALUES ($1, $2, $3)',
-                [expense.id, userId, amountOwed]
+                'INSERT INTO expense_participants (expense_id, user_id, amount_owed, is_paid) VALUES ($1, $2, $3, $4)',
+                [expense.id, userId, amountOwed, isPaid]
             );
         }
 
