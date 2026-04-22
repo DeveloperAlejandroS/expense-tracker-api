@@ -80,7 +80,8 @@ const getExpenses = async (req, res) => {
                         DISTINCT jsonb_build_object(
                             'user_id', ep.user_id,
                             'email', participant_user.email,
-                            'amount_owed', ep.amount_owed
+                            'amount_owed', ep.amount_owed,
+                            'is_paid', COALESCE(ep.is_paid, false)
                         )
                     ) FILTER (WHERE ep.user_id IS NOT NULL),
                     '[]'::json
@@ -122,6 +123,7 @@ const getExpenses = async (req, res) => {
                     user_id: participant.user_id,
                     email: participant.email,
                     amount_owed: Number(participant.amount_owed),
+                    is_paid: participant.is_paid || false,
                 }))
                 : [],
             created_at: expense.created_at,
