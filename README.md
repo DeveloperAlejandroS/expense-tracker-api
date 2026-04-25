@@ -2,18 +2,19 @@
 
 API REST para gestionar gastos compartidos estilo Splitwise.
 
-Estado actual:
-- Autenticacion y perfil de usuario con JWT.
-- Modulo de amigos (pending / accepted / blocked).
-- Creacion/listado de gastos compartidos.
-- Balance personal y liquidacion de deudas.
-- Sugerencias de contactos para gastos basadas en amigos aceptados.
+## Estado actual
+
+- Autenticación y perfil de usuario con JWT.
+- Módulo de amigos con estados pending, accepted y blocked.
+- Creación y listado de gastos compartidos.
+- Balance personal y liquidación de deudas.
+- Sugerencias de contactos basadas en amigos aceptados.
 
 ## Stack
 
 - Node.js
 - Express.js
-- PostgreSQL (Supabase)
+- PostgreSQL
 - pg
 - bcrypt
 - jsonwebtoken
@@ -25,8 +26,8 @@ Estado actual:
 expense-tracker-api/
 - server.js
 - package.json
-- .env.example
 - ENDPOINTS.md
+- README.md
 - src/
   - controllers/
     - authController.js
@@ -45,8 +46,8 @@ expense-tracker-api/
 
 ## Requisitos
 
-- Node.js 18+
-- PostgreSQL accesible (Supabase recomendado)
+- Node.js 18 o superior
+- PostgreSQL accesible
 
 ## Variables de entorno
 
@@ -61,98 +62,106 @@ Variables requeridas:
 - DB_PORT
 - JWT_SECRET
 
-## Instalacion y ejecucion
+## Instalación y ejecución
 
 1. Instalar dependencias:
 
+```bash
 npm install
+```
 
-2. Crear archivo .env con tus credenciales.
+2. Crear un archivo .env con tus credenciales.
 
 3. Ejecutar en desarrollo:
 
+```bash
 npm run dev
+```
 
 4. Ejecutar en modo normal:
 
+```bash
 npm start
+```
 
 Servidor por defecto:
-- http://localhost:3000
+- `http://localhost:3000`
 
-## Logica de negocio implementada
+## Autenticación
 
-Autenticacion:
-- POST /auth/register
-- POST /auth/login
-- GET /auth/me
+Las rutas protegidas usan este header:
 
-Usuarios:
-- GET /users/me
-- PATCH /users/me
-- GET /users/search
+```http
+Authorization: Bearer <JWT>
+```
 
-Friends:
-- POST /friends/request
-- GET /friends
-- GET /friends/requests
-- PATCH /friends/:id/accept
-- PATCH /friends/:id/block
-- DELETE /friends/:id
+## Endpoints principales
 
-Gastos (todas protegidas con JWT):
-- POST /expenses
-  - Crea gasto en transaccion SQL (BEGIN/COMMIT/ROLLBACK).
-  - Divide equitativamente entre creador y participantes.
-  - Solo permite participantes que sean amigos aceptados del creador.
-- GET /expenses/contacts/suggestions
-  - Devuelve contactos sugeridos para crear gastos (amigos aceptados).
-- GET /expenses
-  - Lista gastos donde el usuario pago o participa.
-  - Incluye salida enriquecida con pagador y participantes.
-- GET /expenses/balance
-  - owed_to_me: suma de deudas pendientes que otros tienen conmigo.
-  - i_owe: suma de deudas pendientes que yo tengo con otros.
-  - net_balance = owed_to_me - i_owe.
-  - Ignora registros con is_paid = true.
-- PATCH /expenses/settle
-  - Marca una deuda puntual como pagada (is_paid = true).
-  - Solo puede hacerlo el usuario que pago originalmente el gasto.
+### Público
 
-## Seguridad
+- `GET /` estado básico del servicio.
+- `POST /auth/register` registro de usuario.
+- `POST /auth/login` inicio de sesión.
+
+### Usuario autenticado
+
+- `GET /auth/me` valida el token y devuelve el payload.
+- `GET /users/me` obtiene el perfil completo.
+- `PATCH /users/me` actualiza el perfil parcial.
+- `GET /users/search?q=texto&onlyFriends=true|false` busca usuarios activos.
+
+### Amigos
+
+- `POST /friends/request` envía una solicitud. Recibe `user_id` del usuario destino.
+- `GET /friends` lista amigos aceptados.
+- `GET /friends/requests` lista solicitudes pendientes.
+- `PATCH /friends/:id/accept` acepta la solicitud. Recibe `:id` de `friends.id`.
+- `PATCH /friends/:id/block` bloquea la relación. Recibe `:id` de `friends.id`.
+- `DELETE /friends/:id` elimina la relación. Recibe `:id` de `friends.id`.
+
+### Gastos
+
+- `GET /expenses/contacts/suggestions` sugiere contactos para gastos.
+- `POST /expenses` crea un gasto. Recibe `amount`, `description` y `participants` como array de ids de usuario.
+- `GET /expenses` lista gastos donde participa o paga el usuario.
+- `GET /expenses/balance` devuelve el balance acumulado.
+- `PATCH /expenses/settle` liquida una deuda. Recibe `expense_id` y `user_id` del deudor.
+
+## Formato de datos
+
+Los detalles completos de cada body, query param, respuesta y tipo de id que recibe cada endpoint están documentados en [ENDPOINTS.md](ENDPOINTS.md).
+
+## Flujo recomendado en Postman
+
+1. Registrar usuario con `POST /auth/register`.
+2. Iniciar sesión con `POST /auth/login`.
+3. Guardar el token devuelto.
+4. Buscar usuarios con `GET /users/search`.
+5. Enviar solicitud con `POST /friends/request`.
+6. Aceptar la solicitud con `PATCH /friends/:id/accept` usando el id de la relación.
+7. Ver sugerencias de gasto con `GET /expenses/contacts/suggestions`.
+8. Crear gasto con `POST /expenses`.
+9. Listar gastos con `GET /expenses`.
+10. Consultar balance con `GET /expenses/balance`.
+11. Liquidar deuda con `PATCH /expenses/settle`.
+
+## Seguridad y reglas de negocio
 
 - Passwords con hashing bcrypt.
-- JWT firmado con JWT_SECRET.
-- Middleware verifyToken en rutas protegidas.
-
-Header requerido para rutas protegidas:
-Authorization: Bearer TU_TOKEN (No, no es el real por si acaso listillo)
-
-## Pruebas con Postman
-
-Flujo recomendado:
-1. Registrar usuario (POST /auth/register)
-2. Login (POST /auth/login)
-3. Guardar token
-4. Buscar usuarios (GET /users/search)
-5. Enviar solicitud de amistad (POST /friends/request)
-6. Aceptar solicitud (PATCH /friends/:id/accept)
-7. Ver sugerencias para gasto (GET /expenses/contacts/suggestions)
-8. Crear gasto (POST /expenses)
-9. Listar gastos (GET /expenses)
-10. Consultar balance (GET /expenses/balance)
-11. Liquidar deuda (PATCH /expenses/settle)
-
-Para ejemplos de payload y respuestas, revisa ENDPOINTS.md.
+- JWT firmado con `JWT_SECRET`.
+- Los participantes de gastos deben ser amigos aceptados y activos.
+- La aceptación, bloqueo y eliminación de amistad trabajan sobre el id de la relación, no sobre el id del usuario.
+- En liquidación de deudas, `expense_id` identifica el gasto y `user_id` identifica al deudor.
 
 ## Errores comunes
 
-- 401 Token no proporcionado o invalido.
-- 403 Intento de liquidar un gasto sin ser paid_by.
-- 400 Participantes no validos (no son amigos aceptados).
-- 404 Gasto o deuda no encontrada.
-- 500 Error interno del servidor.
+- `401` token no proporcionado o inválido.
+- `403` intento de modificar una relación o gasto sin permiso.
+- `400` parámetros inválidos o participantes no válidos.
+- `404` recurso no encontrado.
+- `409` conflicto por duplicados o estados ya procesados.
+- `500` error interno del servidor.
 
 ## Notas
 
-- Proyecto en JavaScript puro (CommonJS).
+- Proyecto en JavaScript puro con CommonJS.
