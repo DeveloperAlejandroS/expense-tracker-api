@@ -3,10 +3,11 @@
 API REST para gestionar gastos compartidos estilo Splitwise.
 
 Estado actual:
-- Autenticacion completa con JWT.
-- Creacion y listado de gastos compartidos.
-- Balance personal (cuanto me deben y cuanto debo).
-- Liquidacion de deudas por gasto.
+- Autenticacion y perfil de usuario con JWT.
+- Modulo de amigos (pending / accepted / blocked).
+- Creacion/listado de gastos compartidos.
+- Balance personal y liquidacion de deudas.
+- Sugerencias de contactos para gastos basadas en amigos aceptados.
 
 ## Stack
 
@@ -29,9 +30,13 @@ expense-tracker-api/
 - src/
   - controllers/
     - authController.js
+    - usersController.js
+    - friendsController.js
     - expenseController.js
   - routes/
     - authRoutes.js
+    - usersRoutes.js
+    - friendsRoutes.js
     - expenseRoutes.js
   - middleware/
     - verifyToken.js
@@ -75,32 +80,6 @@ npm start
 Servidor por defecto:
 - http://localhost:3000
 
-## Modelo de base de datos esperado
-
-Tabla users:
-- id (PK)
-- email (UNIQUE)
-- password
-
-Tabla expenses:
-- id (PK)
-- amount
-- description
-- paid_by (FK -> users.id)
-- created_at
-
-Tabla expense_participants:
-- id (PK)
-- expense_id (FK -> expenses.id)
-- user_id (FK -> users.id)
-- amount_owed
-- is_paid (BOOLEAN, default false)
-
-SQL recomendado para columna de liquidacion:
-
-ALTER TABLE expense_participants
-ADD COLUMN IF NOT EXISTS is_paid BOOLEAN NOT NULL DEFAULT false;
-
 ## Logica de negocio implementada
 
 Autenticacion:
@@ -108,10 +87,26 @@ Autenticacion:
 - POST /auth/login
 - GET /auth/me
 
+Usuarios:
+- GET /users/me
+- PATCH /users/me
+- GET /users/search
+
+Friends:
+- POST /friends/request
+- GET /friends
+- GET /friends/requests
+- PATCH /friends/:id/accept
+- PATCH /friends/:id/block
+- DELETE /friends/:id
+
 Gastos (todas protegidas con JWT):
 - POST /expenses
   - Crea gasto en transaccion SQL (BEGIN/COMMIT/ROLLBACK).
   - Divide equitativamente entre creador y participantes.
+  - Solo permite participantes que sean amigos aceptados del creador.
+- GET /expenses/contacts/suggestions
+  - Devuelve contactos sugeridos para crear gastos (amigos aceptados).
 - GET /expenses
   - Lista gastos donde el usuario pago o participa.
   - Incluye salida enriquecida con pagador y participantes.
@@ -131,7 +126,7 @@ Gastos (todas protegidas con JWT):
 - Middleware verifyToken en rutas protegidas.
 
 Header requerido para rutas protegidas:
-Authorization: Bearer TU_TOKEN
+Authorization: Bearer TU_TOKEN (No, no es el real por si acaso listillo)
 
 ## Pruebas con Postman
 
@@ -139,10 +134,14 @@ Flujo recomendado:
 1. Registrar usuario (POST /auth/register)
 2. Login (POST /auth/login)
 3. Guardar token
-4. Crear gasto (POST /expenses)
-5. Listar gastos (GET /expenses)
-6. Consultar balance (GET /expenses/balance)
-7. Liquidar deuda (PATCH /expenses/settle)
+4. Buscar usuarios (GET /users/search)
+5. Enviar solicitud de amistad (POST /friends/request)
+6. Aceptar solicitud (PATCH /friends/:id/accept)
+7. Ver sugerencias para gasto (GET /expenses/contacts/suggestions)
+8. Crear gasto (POST /expenses)
+9. Listar gastos (GET /expenses)
+10. Consultar balance (GET /expenses/balance)
+11. Liquidar deuda (PATCH /expenses/settle)
 
 Para ejemplos de payload y respuestas, revisa ENDPOINTS.md.
 
@@ -150,10 +149,10 @@ Para ejemplos de payload y respuestas, revisa ENDPOINTS.md.
 
 - 401 Token no proporcionado o invalido.
 - 403 Intento de liquidar un gasto sin ser paid_by.
+- 400 Participantes no validos (no son amigos aceptados).
 - 404 Gasto o deuda no encontrada.
 - 500 Error interno del servidor.
 
 ## Notas
 
 - Proyecto en JavaScript puro (CommonJS).
-- No incluye frontend.

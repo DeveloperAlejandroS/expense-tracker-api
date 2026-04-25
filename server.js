@@ -4,6 +4,8 @@ require('dotenv').config();
 
 const db = require('./src/db/connection');
 const authRoutes = require('./src/routes/authRoutes');
+const usersRoutes = require('./src/routes/usersRoutes');
+const friendsRoutes = require('./src/routes/friendsRoutes');
 const expenseRoutes = require('./src/routes/expenseRoutes');
 
 const app = express();
@@ -16,6 +18,8 @@ app.get('/', (req, res) => {
 });
 
 app.use('/auth', authRoutes);
+app.use('/users', usersRoutes);
+app.use('/friends', friendsRoutes);
 app.use('/expenses', expenseRoutes);
 
 const PORT = process.env.PORT || 3000;

@@ -1,5 +1,42 @@
 const db = require('../db/connection');
 
+const getExpenseContactSuggestions = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const result = await db.query(
+            `
+            SELECT
+                u.id,
+                u.email,
+                u.username,
+                u.first_name,
+                u.middle_name,
+                u.last_name,
+                u.second_last_name,
+                u.phone,
+                f.created_at AS friendship_since
+            FROM friends f
+            INNER JOIN users u
+                ON u.id = CASE
+                    WHEN f.user_id_1 = $1 THEN f.user_id_2
+                    ELSE f.user_id_1
+                END
+            WHERE f.status = 'accepted'
+              AND ($1 = f.user_id_1 OR $1 = f.user_id_2)
+              AND u.is_active = true
+            ORDER BY u.username NULLS LAST, u.first_name NULLS LAST, u.email
+            `,
+            [userId]
+        );
+
+        return res.status(200).json({ suggestions: result.rows });
+    } catch (error) {
+        console.error('Error en getExpenseContactSuggestions:', error);
+        return res.status(500).json({ message: 'Error interno del servidor' });
+    }
+};
+
 const createExpense = async (req, res) => {
     const client = await db.getClient();
 
@@ -21,6 +58,38 @@ const createExpense = async (req, res) => {
 
         const cleanedParticipants = [...new Set(participants.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))]
             .filter((id) => id !== paidBy);
+
+        if (cleanedParticipants.length > 0) {
+            const acceptedFriendsResult = await client.query(
+                `
+                SELECT
+                    CASE
+                        WHEN f.user_id_1 = $1 THEN f.user_id_2
+                        ELSE f.user_id_1
+                    END AS friend_id
+                FROM friends f
+                INNER JOIN users u
+                    ON u.id = CASE
+                        WHEN f.user_id_1 = $1 THEN f.user_id_2
+                        ELSE f.user_id_1
+                    END
+                WHERE f.status = 'accepted'
+                  AND ($1 = f.user_id_1 OR $1 = f.user_id_2)
+                  AND u.is_active = true
+                `,
+                [paidBy]
+            );
+
+            const acceptedFriendIds = new Set(acceptedFriendsResult.rows.map((row) => Number(row.friend_id)));
+            const invalidParticipants = cleanedParticipants.filter((id) => !acceptedFriendIds.has(id));
+
+            if (invalidParticipants.length > 0) {
+                return res.status(400).json({
+                    message: 'Solo puedes agregar amigos aceptados como participantes',
+                    invalid_participants: invalidParticipants,
+                });
+            }
+        }
 
         const amountValue = Number(amount);
         const totalPeople = cleanedParticipants.length + 1;
@@ -239,4 +308,5 @@ module.exports = {
     getExpenses,
     getBalance,
     settleExpenseDebt,
+    getExpenseContactSuggestions,
 };
