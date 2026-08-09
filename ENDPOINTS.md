@@ -706,6 +706,45 @@ No son endpoints propios — se generan solos al usar `/expenses`:
 - Cada abono confirmado (`mark-paid`/`confirm`, ver 5.1) genera o incrementa, en el mes actual del **pagador**, un ítem `income` **"Reembolso: `<descripción>`"** por ese monto exacto — la devolución entra como Ingreso real, no como una resta al ítem de Gastos del pagador (que ya no se toca después de creado). `split_role: "payer_income"`. Puede haber varios de estos por el mismo gasto si los abonos caen en meses distintos. Recién cuando el participante terminó de pagar el 100% de su parte, su propio ítem pasa a `is_pending: false` y empieza a contar en su balance.
 - Editar o borrar el gasto compartido recalcula/elimina todos estos ítems (payer, participantes y cualquier reembolso ya recibido).
 
+## 5.3) Libreta (`/libreta`)
+
+Deudas informales de gente que **no** usa Split.it (no son usuarios registrados) y te debe dinero a ti — lo inverso de la sección `debt` del presupuesto (esa es lo que tú debes a otros). Todas estas rutas están protegidas con JWT.
+
+Crear una deuda aquí **no toca el presupuesto para nada** — todavía no entró dinero real. Solo un abono lo hace, y ahí entra como `income`, nunca reduciendo nada. El saldo pendiente de la deuda (aquí) y el total que los abonos fueron sumando en Ingresos (en el presupuesto) son **dos números independientes** — ninguno se recalcula a partir del otro, para que nunca se pisen ni se cuenten dos veces.
+
+### GET /libreta
+Lista todas las deudas del usuario autenticado, más el total pendiente.
+
+Respuesta `200`:
+```json
+{
+  "entries": [
+    { "id": 1, "debtor_name": "Juan Perez", "description": "Préstamo para la moto", "amount_owed": 200000, "amount_paid": 80000, "remaining": 120000, "status": "partial", "created_at": "...", "updated_at": "..." }
+  ],
+  "total_pending": 120000
+}
+```
+
+`status` es uno de `pending` (nada pagado), `partial` (algo pagado) o `paid` (saldada).
+
+### POST /libreta
+Registra una deuda nueva. Body: `{ debtor_name, description, amount_owed }` (`description` opcional). No genera ningún ítem de presupuesto.
+
+### PATCH /libreta/:id
+Edita `debtor_name`, `description` y/o `amount_owed`. Responde `400` si el nuevo `amount_owed` queda por debajo de lo que ya te pagaron.
+
+### DELETE /libreta/:id
+Borra la deuda. Los ítems de Ingresos que ya se generaron por abonos anteriores **no se borran** — ese dinero ya entró de verdad al presupuesto, borrar el registro de la Libreta no la hace desaparecer.
+
+### PATCH /libreta/:id/contribute
+Registra un abono (pago parcial o total). Body opcional: `{ "amount": 60000 }` — si se omite, usa el saldo pendiente completo. Responde `400` si `amount` supera lo que falta.
+
+Efecto:
+1. Suma `amount` a `amount_paid` de la deuda (y actualiza `status`).
+2. Crea un ítem `income` **nuevo** (no acumula sobre uno existente) en tu mes actual, con label `"Abono: <debtor_name>"` (o `"Abono: <debtor_name> — <description>"` si hay descripción), marcado con `libreta_entry_id` — no se puede editar directo desde `PATCH /budget/items/:id` (mismo tipo de restricción que los ítems sincronizados con Split.it).
+
+Respuesta `200`: `{ "message": "Abono registrado", "entry": { ...deuda actualizada... }, "income_item": { ...ítem creado... } }`.
+
 ## 6) Errores comunes
 
 ### 400
