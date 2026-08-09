@@ -5,6 +5,7 @@ const {
     blockFriendship,
     getFriends,
     getPendingRequests,
+    getSentRequests,
     removeFriendship,
     sendFriendRequest,
 } = require('../controllers/friendsController');
@@ -15,6 +16,7 @@ router.use(verifyToken);
 
 router.get('/', getFriends);
 router.get('/requests', getPendingRequests);
+router.get('/requests/sent', getSentRequests);
 router.post('/request', sendFriendRequest);
 router.patch('/:id/accept', acceptFriendship);
 router.patch('/:id/block', blockFriendship);

@@ -77,19 +77,20 @@ Respuesta `201`:
 ```
 
 ### POST /auth/login
-Inicia sesión y devuelve JWT.
+Inicia sesión y devuelve JWT. Acepta email, username o teléfono como identificador.
 
 Body:
 ```json
 {
-  "email": "user1@test.com",
+  "identifier": "user1@test.com",
   "password": "123456"
 }
 ```
 
 Campos:
-- `email`: string obligatorio.
+- `identifier`: string obligatorio — email, username o teléfono. Se busca por igualdad exacta en username/teléfono, y case-insensitive en email.
 - `password`: string obligatorio.
+- `email` sigue aceptado como alias de `identifier` por compatibilidad con clientes viejos.
 
 Respuesta `200`:
 ```json

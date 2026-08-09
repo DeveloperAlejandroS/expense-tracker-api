@@ -260,6 +260,56 @@ const deleteItem = async (req, res) => {
     }
 };
 
+// Abono: suma plata a un ítem existente (típicamente en Ahorros o Deudas)
+// en vez de tener que crear una fila nueva cada vez que metés más plata al
+// mismo fondo/deuda. Si el ítem tiene un espejo de ahorro vinculado, el
+// abono se refleja en ambos para no desincronizarlos.
+const addContribution = async (req, res) => {
+    const client = await db.getClient();
+    let transactionStarted = false;
+
+    try {
+        const userId = req.user.id;
+        const itemId = Number(req.params.id);
+        const amount = Number(req.body.amount);
+
+        if (!Number.isInteger(itemId) || itemId <= 0) {
+            return res.status(400).json({ message: 'id debe ser un entero positivo' });
+        }
+        if (!Number.isFinite(amount) || amount <= 0) {
+            return res.status(400).json({ message: 'amount debe ser un número mayor a 0' });
+        }
+
+        const { error, item } = await loadOwnedItem(client, itemId, userId);
+        if (error) return res.status(error.status).json({ message: error.message });
+
+        await client.query('BEGIN');
+        transactionStarted = true;
+
+        const updated = await client.query(
+            'UPDATE budget_items SET actual_amount = actual_amount + $1, updated_at = now() WHERE id = $2 RETURNING *',
+            [amount, itemId]
+        );
+
+        if (item.linked_saving_item_id) {
+            await client.query(
+                'UPDATE budget_items SET actual_amount = actual_amount + $1, budgeted_amount = budgeted_amount + $1, updated_at = now() WHERE id = $2',
+                [amount, item.linked_saving_item_id]
+            );
+        }
+
+        await client.query('COMMIT');
+
+        return res.status(200).json({ message: 'Abono registrado', item: updated.rows[0] });
+    } catch (error) {
+        if (transactionStarted) await client.query('ROLLBACK');
+        console.error('Error en addContribution:', error);
+        return res.status(500).json({ message: 'Error interno del servidor' });
+    } finally {
+        client.release();
+    }
+};
+
 // Permite corregir/sembrar los saldos de apertura de un mes a mano — esto
 // es lo que le da sentido real a "Balance Deudas pendiente": sin un monto
 // inicial de deuda, ese balance nunca tiene de dónde arrancar y termina
@@ -317,6 +367,7 @@ module.exports = {
     getMonth,
     createItem,
     updateItem,
+    addContribution,
     deleteItem,
     updateOpening,
 };
