@@ -2,12 +2,12 @@
 
 ## Contexto
 
-Hoy el control de presupuesto personal vive en un Excel mensual (ver captura de referencia, julio 2026) con 5 secciones — Ingresos, Gastos Fijos, Seguimiento de Gastos (variables), Ahorros, Deudas — cada una con columnas Presupuestado/Actual, más un resumen de Flujo de Caja. La idea es migrar esto a Split.it como un módulo nuevo, personal por usuario, que además se conecte con los gastos compartidos existentes (si pagás o participás de un gasto compartido, eso debe reflejarse acá porque es plata real que salió de tu bolsillo).
+Hoy el control de presupuesto personal vive en un Excel mensual (ver captura de referencia, julio 2026) con 5 secciones — Ingresos, Gastos Fijos, Seguimiento de Gastos (variables), Ahorros, Deudas — cada una con columnas Presupuestado/Actual, más un resumen de Flujo de Caja. La idea es migrar esto a Split.it como un módulo nuevo, personal por usuario, que además se conecte con los gastos compartidos existentes (si pagas o participas de un gasto compartido, eso debe reflejarse aquí porque es dinero real que salió de tu bolsillo).
 
 Decisiones ya confirmadas:
 - Los ítems de Gastos Fijos/Seguimiento se cargan a mano cada mes (no hay plantilla recurrente que se autocomplete).
 - El reflejo de un gasto "tipo ahorro" hacia la sección Ahorros hoy es manual (doble carga) — en la app **esto se automatiza**: una fila puede marcarse "Es ahorro" y su monto acredita Ahorros solo, sin cargarlo dos veces.
-- Integración con Split.it: si sos el pagador de un gasto compartido, la plata salió de tu bolsillo completa al crearlo, y cada liquidación de un participante te la devuelve (reduce el gasto personal neto). Si sos participante (no pagador), tu parte cuenta como gasto personal recién cuando la pagás de verdad (`status = paid`), no antes.
+- Integración con Split.it: si eres el pagador de un gasto compartido, el dinero salió de tu bolsillo completo al crearlo, y cada liquidación de un participante te la devuelve (reduce el gasto personal neto). Si eres participante (no pagador), tu parte cuenta como gasto personal recién cuando la pagas de verdad (`status = paid`), no antes.
 
 ## Modelo de datos (nuevas tablas, mismo Postgres)
 
@@ -31,10 +31,10 @@ Vive en un servicio nuevo (`src/services/budgetSyncService.js`) que el `expenseC
 
 | Evento en Split.it | Efecto en el presupuesto personal |
 |---|---|
-| Creás un gasto compartido (sos `paid_by`) | Se crea/actualiza un `budget_item` tipo `tracked_expense` en tu mes actual, `actual_amount` = monto total del gasto (toda la plata salió de tu bolsillo). |
-| Un participante liquida su parte (`status → paid`, vía confirm o mark-paid) | Ese `budget_item` del pagador se reduce en el monto liquidado (te devolvieron esa plata). |
+| Creas un gasto compartido (eres `paid_by`) | Se crea/actualiza un `budget_item` tipo `tracked_expense` en tu mes actual, `actual_amount` = monto total del gasto (todo el dinero salió de tu bolsillo). |
+| Un participante liquida su parte (`status → paid`, vía confirm o mark-paid) | Ese `budget_item` del pagador se reduce en el monto liquidado (te devolvieron ese dinero). |
 | Se rechaza una liquidación (`status → pending`) | El `budget_item` del pagador vuelve a subir ese monto. |
-| Tu propia parte como participante pasa a `paid` | Se crea un `budget_item` tipo `tracked_expense` en **tu** mes, por tu monto — recién ahí, porque antes de pagar no salió plata real. |
+| Tu propia parte como participante pasa a `paid` | Se crea un `budget_item` tipo `tracked_expense` en **tu** mes, por tu monto — recién ahí, porque antes de pagar no salió dinero real. |
 | Se edita o borra el gasto compartido | Se recalculan/eliminan los `budget_items` vinculados vía `budget_split_sync`. |
 
 Estos ítems quedan de solo lectura en la UI (con una etiqueta "vinculado a Split.it" y link al detalle del gasto) — no se editan a mano para no desincronizarlos.
@@ -46,7 +46,7 @@ Estos ítems quedan de solo lectura en la UI (con una etiqueta "vinculado a Spli
 - `Saldo semanal` = `Presupuestado / 4`.
 - `Balance (Flujo de Caja)` = `+ Saldo anterior + Ingreso − Gastos Fijos − Gastos + Ahorros − Deudas` *(el `+` en Ahorros es tal cual tu fórmula actual — confirmá si es intencional)*.
 - `Balance Ahorros` = `Saldo anterior + Ahorros del mes (incluye los is_savings_link)`.
-- `Balance Deudas` = `Saldo anterior − Deudas pagadas` (a definir signo exacto con vos).
+- `Balance Deudas` = `Saldo anterior − Deudas pagadas` (a definir signo exacto contigo).
 - Al cerrar/pasar de mes, estos balances se snapshotean como `opening_*` del mes siguiente.
 
 ## Endpoints (sketch)

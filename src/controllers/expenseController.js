@@ -188,7 +188,7 @@ const createExpense = async (req, res) => {
 
         const expense = expenseResult.rows[0];
         await insertParticipants(client, expense.id, paidBy, resolved.shares);
-        await budgetSyncService.onExpenseCreated(client, expense);
+        await budgetSyncService.onExpenseCreated(client, expense, resolved.shares);
 
         await client.query('COMMIT');
 
@@ -258,7 +258,7 @@ const updateExpense = async (req, res) => {
             [resolved.amountValue, resolved.description, expenseId]
         );
 
-        await budgetSyncService.onExpenseUpdated(client, expenseId, updatedExpenseResult.rows[0]);
+        await budgetSyncService.onExpenseUpdated(client, expenseId, updatedExpenseResult.rows[0], resolved.shares);
 
         await client.query('COMMIT');
 
@@ -346,6 +346,8 @@ const getExpenses = async (req, res) => {
                             'user_id', ep.user_id,
                             'email', participant_user.email,
                             'amount_owed', ep.amount_owed,
+                            'amount_paid', ep.amount_paid,
+                            'pending_claim_amount', ep.pending_claim_amount,
                             'status', ep.status,
                             'paid_claimed_at', ep.paid_claimed_at,
                             'confirmed_at', ep.confirmed_at
@@ -390,6 +392,8 @@ const getExpenses = async (req, res) => {
                     user_id: participant.user_id,
                     email: participant.email,
                     amount_owed: Number(participant.amount_owed),
+                    amount_paid: Number(participant.amount_paid || 0),
+                    pending_claim_amount: participant.pending_claim_amount !== null ? Number(participant.pending_claim_amount) : null,
                     status: participant.status || 'pending',
                     paid_claimed_at: participant.paid_claimed_at,
                     confirmed_at: participant.confirmed_at,
@@ -474,8 +478,10 @@ const getBalance = async (req, res) => {
     }
 };
 
-// El propio deudor avisa que ya pagó su parte. Queda a la espera de que el
-// pagador lo confirme (o lo rechace) — ver confirmParticipantPayment / rejectParticipantPayment.
+// El propio deudor avisa que pagó `amount` de su parte (por defecto, todo lo
+// que le queda pendiente — así sigue funcionando igual que antes si no se
+// manda el campo). Queda a la espera de que el pagador lo confirme (o lo
+// rechace) — ver confirmParticipantPayment / rejectParticipantPayment.
 const claimExpenseDebt = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -485,16 +491,36 @@ const claimExpenseDebt = async (req, res) => {
             return res.status(400).json({ message: 'id debe ser un entero positivo' });
         }
 
+        const participantResult = await db.query(
+            `SELECT id, amount_owed, amount_paid, status FROM expense_participants WHERE expense_id = $1 AND user_id = $2`,
+            [expenseId, userId]
+        );
+        const participant = participantResult.rows[0];
+
+        if (!participant || participant.status !== 'pending') {
+            return res.status(404).json({ message: 'No se encontró una deuda pendiente tuya en este gasto' });
+        }
+
+        const remaining = Number(participant.amount_owed) - Number(participant.amount_paid);
+        const claimAmount = req.body?.amount !== undefined ? Number(req.body.amount) : remaining;
+
+        if (!Number.isFinite(claimAmount) || claimAmount <= 0) {
+            return res.status(400).json({ message: 'amount debe ser un número mayor a 0' });
+        }
+        if (claimAmount > remaining + 0.01) {
+            return res.status(400).json({ message: `No puedes abonar más de lo que debes (te quedan ${remaining})` });
+        }
+
         const result = await db.query(
             `
             UPDATE expense_participants
-            SET status = 'paid_pending_confirmation', paid_claimed_at = now()
+            SET status = 'paid_pending_confirmation', paid_claimed_at = now(), pending_claim_amount = $3
             WHERE expense_id = $1
               AND user_id = $2
               AND status = 'pending'
-            RETURNING id, expense_id, user_id, amount_owed, status, paid_claimed_at, confirmed_at
+            RETURNING id, expense_id, user_id, amount_owed, amount_paid, pending_claim_amount, status, paid_claimed_at, confirmed_at
             `,
-            [expenseId, userId]
+            [expenseId, userId, claimAmount]
         );
 
         if (result.rows.length === 0) {
@@ -528,8 +554,11 @@ const requireOwnedExpense = async (expenseId, requesterId) => {
     return { expense };
 };
 
-// El pagador marca a un participante como pagado directamente (ej. pago en
-// efectivo), sin pasar por el flujo de confirmación.
+// El pagador registra un abono de un participante directamente (ej. pago en
+// efectivo), sin pasar por el flujo de confirmación. `amount` es opcional —
+// por defecto abona todo lo que falta (mismo comportamiento binario de
+// antes). Si el abono no cubre el total, el participante queda 'pending'
+// con su amount_paid actualizado, listo para otro abono más adelante.
 const markParticipantPaid = async (req, res) => {
     try {
         const paidBy = req.user.id;
@@ -543,25 +572,47 @@ const markParticipantPaid = async (req, res) => {
         const { error } = await requireOwnedExpense(expenseId, paidBy);
         if (error) return res.status(error.status).json({ message: error.message });
 
-        const result = await db.query(
-            `
-            UPDATE expense_participants
-            SET status = 'paid', confirmed_at = now()
-            WHERE expense_id = $1
-              AND user_id = $2
-              AND status <> 'paid'
-            RETURNING id, expense_id, user_id, amount_owed, status, paid_claimed_at, confirmed_at
-            `,
+        const participantResult = await db.query(
+            `SELECT amount_owed, amount_paid, status FROM expense_participants WHERE expense_id = $1 AND user_id = $2`,
             [expenseId, debtorUserId]
         );
+        const participant = participantResult.rows[0];
 
-        if (result.rows.length === 0) {
+        if (!participant || participant.status === 'paid') {
             return res.status(404).json({ message: 'Participante no encontrado o ya estaba pagado' });
         }
 
-        await budgetSyncService.onParticipantSettled(db, expenseId, debtorUserId);
+        const remaining = Number(participant.amount_owed) - Number(participant.amount_paid);
+        const payAmount = req.body?.amount !== undefined ? Number(req.body.amount) : remaining;
 
-        return res.status(200).json({ message: 'Marcado como pagado', participant: result.rows[0] });
+        if (!Number.isFinite(payAmount) || payAmount <= 0) {
+            return res.status(400).json({ message: 'amount debe ser un número mayor a 0' });
+        }
+        if (payAmount > remaining + 0.01) {
+            return res.status(400).json({ message: `No puedes marcar más de lo que debe (le quedan ${remaining})` });
+        }
+
+        const isFullyPaid = payAmount >= remaining - 0.01;
+
+        const result = await db.query(
+            `
+            UPDATE expense_participants
+            SET amount_paid = amount_paid + $3,
+                status = $4,
+                pending_claim_amount = NULL,
+                confirmed_at = CASE WHEN $4 = 'paid' THEN now() ELSE confirmed_at END
+            WHERE expense_id = $1 AND user_id = $2
+            RETURNING id, expense_id, user_id, amount_owed, amount_paid, status, paid_claimed_at, confirmed_at
+            `,
+            [expenseId, debtorUserId, payAmount, isFullyPaid ? 'paid' : 'pending']
+        );
+
+        await budgetSyncService.onParticipantSettled(db, expenseId, debtorUserId, payAmount, isFullyPaid);
+
+        return res.status(200).json({
+            message: isFullyPaid ? 'Marcado como pagado' : 'Abono registrado',
+            participant: result.rows[0],
+        });
     } catch (error) {
         console.error('Error en markParticipantPaid:', error);
         return res.status(500).json({ message: 'Error interno del servidor' });
@@ -581,25 +632,39 @@ const confirmParticipantPayment = async (req, res) => {
         const { error } = await requireOwnedExpense(expenseId, paidBy);
         if (error) return res.status(error.status).json({ message: error.message });
 
-        const result = await db.query(
-            `
-            UPDATE expense_participants
-            SET status = 'paid', confirmed_at = now()
-            WHERE expense_id = $1
-              AND user_id = $2
-              AND status = 'paid_pending_confirmation'
-            RETURNING id, expense_id, user_id, amount_owed, status, paid_claimed_at, confirmed_at
-            `,
+        const participantResult = await db.query(
+            `SELECT amount_owed, amount_paid, pending_claim_amount, status FROM expense_participants WHERE expense_id = $1 AND user_id = $2`,
             [expenseId, debtorUserId]
         );
+        const participant = participantResult.rows[0];
 
-        if (result.rows.length === 0) {
+        if (!participant || participant.status !== 'paid_pending_confirmation') {
             return res.status(404).json({ message: 'No hay un pago esperando confirmación para este participante' });
         }
 
-        await budgetSyncService.onParticipantSettled(db, expenseId, debtorUserId);
+        const claimAmount = Number(participant.pending_claim_amount);
+        const newAmountPaid = Number(participant.amount_paid) + claimAmount;
+        const isFullyPaid = newAmountPaid >= Number(participant.amount_owed) - 0.01;
 
-        return res.status(200).json({ message: 'Pago confirmado', participant: result.rows[0] });
+        const result = await db.query(
+            `
+            UPDATE expense_participants
+            SET amount_paid = $3,
+                status = $4,
+                pending_claim_amount = NULL,
+                confirmed_at = CASE WHEN $4 = 'paid' THEN now() ELSE confirmed_at END
+            WHERE expense_id = $1 AND user_id = $2
+            RETURNING id, expense_id, user_id, amount_owed, amount_paid, status, paid_claimed_at, confirmed_at
+            `,
+            [expenseId, debtorUserId, newAmountPaid, isFullyPaid ? 'paid' : 'pending']
+        );
+
+        await budgetSyncService.onParticipantSettled(db, expenseId, debtorUserId, claimAmount, isFullyPaid);
+
+        return res.status(200).json({
+            message: isFullyPaid ? 'Pago confirmado' : 'Abono confirmado',
+            participant: result.rows[0],
+        });
     } catch (error) {
         console.error('Error en confirmParticipantPayment:', error);
         return res.status(500).json({ message: 'Error interno del servidor' });
@@ -622,11 +687,11 @@ const rejectParticipantPayment = async (req, res) => {
         const result = await db.query(
             `
             UPDATE expense_participants
-            SET status = 'pending', paid_claimed_at = NULL
+            SET status = 'pending', paid_claimed_at = NULL, pending_claim_amount = NULL
             WHERE expense_id = $1
               AND user_id = $2
               AND status = 'paid_pending_confirmation'
-            RETURNING id, expense_id, user_id, amount_owed, status, paid_claimed_at, confirmed_at
+            RETURNING id, expense_id, user_id, amount_owed, amount_paid, status, paid_claimed_at, confirmed_at
             `,
             [expenseId, debtorUserId]
         );

@@ -113,11 +113,17 @@ const register = async (req, res) => {
 
 const login = async (req, res) => {
     try {
-        const { email, password } = req.body;
+        // Acepta login con email, username o teléfono. `identifier` es el
+        // campo nuevo; `email` se sigue aceptando por compatibilidad con
+        // clientes existentes que solo mandan ese campo.
+        const { email, identifier, password } = req.body;
+        const rawIdentifier = identifier ?? email;
 
-        if (!email || !password) {
-            return res.status(400).json({ message: 'Email y password son requeridos' });
+        if (!rawIdentifier || !password) {
+            return res.status(400).json({ message: 'Identificador (email, username o teléfono) y password son requeridos' });
         }
+
+        const trimmedIdentifier = String(rawIdentifier).trim();
 
         const result = await db.query(
             `
@@ -134,9 +140,9 @@ const login = async (req, res) => {
                 phone,
                 is_active
             FROM users
-            WHERE email = $1
+            WHERE email = $1 OR username = $2 OR phone = $2
             `,
-            [String(email).trim().toLowerCase()]
+            [trimmedIdentifier.toLowerCase(), trimmedIdentifier]
         );
         const user = result.rows[0];
 

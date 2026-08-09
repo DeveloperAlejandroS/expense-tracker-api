@@ -9,7 +9,7 @@ const canonicalPair = (userId1, userId2) => {
 const sendFriendRequest = async (req, res) => {
     try {
         const requesterId = req.user.id;
-        const targetUserId = Number(req.body.user_id);
+        const targetUserId = Number(req.body?.user_id);
 
         if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
             return res.status(400).json({ message: 'user_id debe ser un entero positivo' });
@@ -55,11 +55,11 @@ const sendFriendRequest = async (req, res) => {
 
         const created = await db.query(
             `
-            INSERT INTO friends (user_id_1, user_id_2, status)
-            VALUES ($1, $2, 'pending')
-            RETURNING id, user_id_1, user_id_2, status, created_at
+            INSERT INTO friends (user_id_1, user_id_2, status, requested_by)
+            VALUES ($1, $2, 'pending', $3)
+            RETURNING id, user_id_1, user_id_2, status, requested_by, created_at
             `,
-            [userId1, userId2]
+            [userId1, userId2, requesterId]
         );
 
         return res.status(201).json({
@@ -110,7 +110,50 @@ const getFriends = async (req, res) => {
     }
 };
 
+// Solicitudes que OTROS te enviaron a tú — las únicas que puedes aceptar.
+// (Antes esto devolvía cualquier relación pendiente donde aparecieras,
+// incluidas las que tú mismo enviaste, lo que además de confuso en la UI
+// permitía "aceptar" tu propia solicitud pegándole directo al endpoint,
+// ya que no había forma de distinguir quién la había enviado.)
 const getPendingRequests = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const result = await db.query(
+            `
+            SELECT
+                f.id AS friendship_id,
+                f.status,
+                f.created_at,
+                u.id,
+                u.email,
+                u.username,
+                u.first_name,
+                u.middle_name,
+                u.last_name,
+                u.second_last_name,
+                u.phone
+            FROM friends f
+            INNER JOIN users u
+                ON u.id = f.requested_by
+            WHERE f.status = 'pending'
+              AND ($1 = f.user_id_1 OR $1 = f.user_id_2)
+              AND f.requested_by <> $1
+            ORDER BY f.created_at DESC
+            `,
+            [userId]
+        );
+
+        return res.status(200).json({ requests: result.rows });
+    } catch (error) {
+        console.error('Error en getPendingRequests:', error);
+        return res.status(500).json({ message: 'Error interno del servidor' });
+    }
+};
+
+// Solicitudes que VOS enviaste y siguen esperando que el otro las acepte —
+// de solo lectura, sin acción posible sobre ellas acá.
+const getSentRequests = async (req, res) => {
     try {
         const userId = req.user.id;
 
@@ -135,7 +178,7 @@ const getPendingRequests = async (req, res) => {
                     ELSE f.user_id_1
                 END
             WHERE f.status = 'pending'
-              AND ($1 = f.user_id_1 OR $1 = f.user_id_2)
+              AND f.requested_by = $1
             ORDER BY f.created_at DESC
             `,
             [userId]
@@ -143,7 +186,7 @@ const getPendingRequests = async (req, res) => {
 
         return res.status(200).json({ requests: result.rows });
     } catch (error) {
-        console.error('Error en getPendingRequests:', error);
+        console.error('Error en getSentRequests:', error);
         return res.status(500).json({ message: 'Error interno del servidor' });
     }
 };
@@ -158,7 +201,7 @@ const acceptFriendship = async (req, res) => {
         }
 
         const friendshipResult = await db.query(
-            'SELECT id, user_id_1, user_id_2, status FROM friends WHERE id = $1',
+            'SELECT id, user_id_1, user_id_2, status, requested_by FROM friends WHERE id = $1',
             [friendshipId]
         );
 
@@ -170,6 +213,10 @@ const acceptFriendship = async (req, res) => {
 
         if (friendship.user_id_1 !== userId && friendship.user_id_2 !== userId) {
             return res.status(403).json({ message: 'No tienes permiso para modificar esta solicitud' });
+        }
+
+        if (friendship.requested_by === userId) {
+            return res.status(403).json({ message: 'No puedes aceptar una solicitud que tú mismo enviaste' });
         }
 
         if (friendship.status !== 'pending') {
@@ -277,6 +324,7 @@ module.exports = {
     sendFriendRequest,
     getFriends,
     getPendingRequests,
+    getSentRequests,
     acceptFriendship,
     blockFriendship,
     removeFriendship,
