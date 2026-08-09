@@ -4,6 +4,7 @@ const {
     toMonthDate,
     getOrCreateBudgetMonth,
     computeMonthTotals,
+    recomputeForwardChainForMonth,
 } = require('../services/budgetSyncService');
 
 const MONTH_PARAM_REGEX = /^\d{4}-\d{2}$/;
@@ -121,6 +122,8 @@ const createItem = async (req, res) => {
             item = updated.rows[0];
         }
 
+        await recomputeForwardChainForMonth(client, budgetMonth.id);
+
         await client.query('COMMIT');
 
         return res.status(201).json({ message: 'Ítem creado correctamente', item });
@@ -214,6 +217,8 @@ const updateItem = async (req, res) => {
             [nextLabel, nextBudgeted, nextActual, nextSavingsLink, linkedSavingItemId, itemId]
         );
 
+        await recomputeForwardChainForMonth(client, item.budget_month_id);
+
         await client.query('COMMIT');
 
         return res.status(200).json({ message: 'Ítem actualizado correctamente', item: updated.rows[0] });
@@ -247,6 +252,8 @@ const deleteItem = async (req, res) => {
             await client.query('DELETE FROM budget_items WHERE id = $1', [item.linked_saving_item_id]);
         }
         await client.query('DELETE FROM budget_items WHERE id = $1', [itemId]);
+
+        await recomputeForwardChainForMonth(client, item.budget_month_id);
 
         await client.query('COMMIT');
 
@@ -298,6 +305,8 @@ const addContribution = async (req, res) => {
             );
         }
 
+        await recomputeForwardChainForMonth(client, item.budget_month_id);
+
         await client.query('COMMIT');
 
         return res.status(200).json({ message: 'Abono registrado', item: updated.rows[0] });
@@ -314,9 +323,13 @@ const addContribution = async (req, res) => {
 // es lo que le da sentido real a "Balance Deudas pendiente": sin un monto
 // inicial de deuda, ese balance nunca tiene de dónde arrancar y termina
 // corriendo al revés (bajando en negativo con cada pago en vez de acercarse
-// a cero). No recalcula meses siguientes — eso queda para el rediseño de
-// "recálculo hacia adelante" documentado en PLAN_GASTOS_PERSONALES.md.
+// a cero). Los meses siguientes que ya existan se recalculan en cascada
+// (ver `recomputeForwardChainForMonth`), así que corregir un saldo acá
+// también corrige lo que ya se había arrastrado mal a futuro.
 const updateOpening = async (req, res) => {
+    const client = await db.getClient();
+    let transactionStarted = false;
+
     try {
         const userId = req.user.id;
         const monthDate = parseMonthParam(req.params.month);
@@ -329,7 +342,7 @@ const updateOpening = async (req, res) => {
             return res.status(400).json({ message: 'Enviá al menos un saldo para actualizar' });
         }
 
-        const budgetMonth = await getOrCreateBudgetMonth(db, userId, monthDate);
+        const budgetMonth = await getOrCreateBudgetMonth(client, userId, monthDate);
 
         const nextCash = cashBalance !== undefined ? Number(cashBalance) : Number(budgetMonth.opening_cash_balance);
         const nextSavings = savingsBalance !== undefined ? Number(savingsBalance) : Number(budgetMonth.opening_savings_balance);
@@ -339,7 +352,10 @@ const updateOpening = async (req, res) => {
             return res.status(400).json({ message: 'Los saldos deben ser números' });
         }
 
-        const updated = await db.query(
+        await client.query('BEGIN');
+        transactionStarted = true;
+
+        const updated = await client.query(
             `
             UPDATE budget_months
             SET opening_cash_balance = $1, opening_savings_balance = $2, opening_debt_balance = $3
@@ -349,8 +365,12 @@ const updateOpening = async (req, res) => {
             [nextCash, nextSavings, nextDebt, budgetMonth.id]
         );
 
+        await recomputeForwardChainForMonth(client, budgetMonth.id);
+
+        await client.query('COMMIT');
+
         return res.status(200).json({
-            message: 'Saldos iniciales actualizados. Los meses siguientes no se recalculan automáticamente.',
+            message: 'Saldos iniciales actualizados',
             opening: {
                 cash_balance: Number(updated.rows[0].opening_cash_balance),
                 savings_balance: Number(updated.rows[0].opening_savings_balance),
@@ -358,8 +378,11 @@ const updateOpening = async (req, res) => {
             },
         });
     } catch (error) {
+        if (transactionStarted) await client.query('ROLLBACK');
         console.error('Error en updateOpening:', error);
         return res.status(500).json({ message: 'Error interno del servidor' });
+    } finally {
+        client.release();
     }
 };
 

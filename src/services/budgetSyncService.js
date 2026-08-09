@@ -130,6 +130,59 @@ const computeMonthTotals = async (client, budgetMonth) => {
     };
 };
 
+// Recalcula en cascada los `opening_*` de todos los meses de `userId` que ya
+// existan DESPUÉS de `monthDate`, encadenando el cierre de cada mes con la
+// apertura del siguiente. Sin esto, si abonás a un ahorro/deuda o corregís
+// un saldo inicial DESPUÉS de que el mes siguiente ya se había creado (por
+// haberlo abierto una vez), ese mes queda con una apertura vieja — el saldo
+// no fluye de un mes al otro como debería. Se corta apenas encuentra un mes
+// cuya apertura ya está al día (el resto de la cadena, si la hay, ya lo
+// estará también) o cuando no hay más meses siguientes creados.
+const recomputeForwardChain = async (client, userId, monthDate) => {
+    let cursor = toMonthDate(monthDate);
+
+    for (let i = 0; i < 240; i += 1) {
+        const currentResult = await client.query(
+            'SELECT * FROM budget_months WHERE user_id = $1 AND month = $2',
+            [userId, cursor]
+        );
+        const currentMonth = currentResult.rows[0];
+        if (!currentMonth) return;
+
+        const { totals } = await computeMonthTotals(client, currentMonth);
+
+        const nextResult = await client.query(
+            'SELECT * FROM budget_months WHERE user_id = $1 AND month > $2 ORDER BY month ASC LIMIT 1',
+            [userId, cursor]
+        );
+        const nextMonth = nextResult.rows[0];
+        if (!nextMonth) return;
+
+        const alreadyUpToDate =
+            Number(nextMonth.opening_cash_balance) === totals.balance &&
+            Number(nextMonth.opening_savings_balance) === totals.savings_balance &&
+            Number(nextMonth.opening_debt_balance) === totals.debt_balance;
+
+        if (alreadyUpToDate) return;
+
+        await client.query(
+            'UPDATE budget_months SET opening_cash_balance = $1, opening_savings_balance = $2, opening_debt_balance = $3 WHERE id = $4',
+            [totals.balance, totals.savings_balance, totals.debt_balance, nextMonth.id]
+        );
+
+        cursor = toMonthDate(nextMonth.month);
+    }
+};
+
+// Atajo para cuando lo que se tiene a mano es un budget_month_id (o el id de
+// un ítem que pertenece a ese mes) en vez de (userId, monthDate) directo.
+const recomputeForwardChainForMonth = async (client, budgetMonthId) => {
+    const monthResult = await client.query('SELECT user_id, month FROM budget_months WHERE id = $1', [budgetMonthId]);
+    const row = monthResult.rows[0];
+    if (!row) return;
+    await recomputeForwardChain(client, row.user_id, row.month);
+};
+
 // Se llama al crear (o re-crear en un edit) un gasto compartido:
 // - El pagador recibe un ítem CONFIRMADO por el monto completo (esa plata
 //   salió de su bolsillo de verdad, ya).
@@ -153,6 +206,10 @@ const onExpenseCreated = async (client, expense, shares) => {
         `INSERT INTO budget_split_sync (budget_item_id, expense_id, user_id, role) VALUES ($1, $2, $3, 'payer')`,
         [payerItemResult.rows[0].id, expense.id, expense.paid_by]
     );
+
+    // El ítem del pagador ya cuenta desde ya (no es pending) — si su mes
+    // siguiente ya existía, su apertura queda vieja hasta que se recalcula.
+    await recomputeForwardChainForMonth(client, payerMonth.id);
 
     if (!shares) return;
 
@@ -181,10 +238,24 @@ const onExpenseCreated = async (client, expense, shares) => {
 // ya haya generado su propio ítem) — usado antes de re-crear en un edit, o
 // directamente al borrar el gasto.
 const clearExpenseSync = async (client, expenseId) => {
+    const affectedMonths = await client.query(
+        `
+        SELECT DISTINCT bi.budget_month_id
+        FROM budget_items bi
+        INNER JOIN budget_split_sync bs ON bs.budget_item_id = bi.id
+        WHERE bs.expense_id = $1
+        `,
+        [expenseId]
+    );
+
     await client.query(
         `DELETE FROM budget_items WHERE id IN (SELECT budget_item_id FROM budget_split_sync WHERE expense_id = $1)`,
         [expenseId]
     );
+
+    for (const row of affectedMonths.rows) {
+        await recomputeForwardChainForMonth(client, row.budget_month_id);
+    }
 };
 
 const onExpenseUpdated = async (client, expenseId, expense, shares) => {
@@ -204,28 +275,45 @@ const onExpenseDeleted = async (client, expenseId) => {
 // quede algo por pagar, el ítem del deudor se mantiene pendiente tal cual.
 const onParticipantSettled = async (client, expenseId, debtorUserId, incrementAmount, isFullyPaid) => {
     const payerSyncResult = await client.query(
-        `SELECT budget_item_id FROM budget_split_sync WHERE expense_id = $1 AND role = 'payer'`,
+        `
+        SELECT bi.id AS budget_item_id, bi.budget_month_id
+        FROM budget_split_sync bs
+        INNER JOIN budget_items bi ON bi.id = bs.budget_item_id
+        WHERE bs.expense_id = $1 AND bs.role = 'payer'
+        `,
         [expenseId]
     );
     if (payerSyncResult.rows.length > 0) {
+        const { budget_item_id: payerItemId, budget_month_id: payerMonthId } = payerSyncResult.rows[0];
         await client.query(
             'UPDATE budget_items SET actual_amount = actual_amount - $1, updated_at = now() WHERE id = $2',
-            [incrementAmount, payerSyncResult.rows[0].budget_item_id]
+            [incrementAmount, payerItemId]
         );
+        await recomputeForwardChainForMonth(client, payerMonthId);
     }
 
     if (!isFullyPaid) return;
 
     const existingParticipantSync = await client.query(
-        `SELECT budget_item_id FROM budget_split_sync WHERE expense_id = $1 AND user_id = $2 AND role = 'participant'`,
+        `
+        SELECT bi.id AS budget_item_id, bi.budget_month_id
+        FROM budget_split_sync bs
+        INNER JOIN budget_items bi ON bi.id = bs.budget_item_id
+        WHERE bs.expense_id = $1 AND bs.user_id = $2 AND bs.role = 'participant'
+        `,
         [expenseId, debtorUserId]
     );
 
     if (existingParticipantSync.rows.length > 0) {
+        const { budget_item_id: participantItemId, budget_month_id: participantMonthId } = existingParticipantSync.rows[0];
         await client.query(
             'UPDATE budget_items SET is_pending = false, updated_at = now() WHERE id = $1',
-            [existingParticipantSync.rows[0].budget_item_id]
+            [participantItemId]
         );
+        // El ítem del deudor recién ahora empieza a contar (is_pending pasó
+        // a false) — su Balance de este mes cambió, así que su cadena hacia
+        // adelante también puede necesitar recalcularse.
+        await recomputeForwardChainForMonth(client, participantMonthId);
     }
 };
 
@@ -235,6 +323,8 @@ module.exports = {
     currentMonthDate,
     getOrCreateBudgetMonth,
     computeMonthTotals,
+    recomputeForwardChain,
+    recomputeForwardChainForMonth,
     onExpenseCreated,
     onExpenseUpdated,
     onExpenseDeleted,

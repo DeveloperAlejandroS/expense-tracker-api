@@ -664,6 +664,17 @@ Fórmulas: `budgeted_net/actual_net = Ingreso − Gastos Fijos − Gastos`; `wee
 
 **`is_pending`:** un ítem con `is_pending: true` es una obligación *visible* (tu parte de un gasto compartido que todavía no pagaste de verdad) — aparece en `items` de su sección para que no se pierda de vista, pero **no** suma en `budgeted_total`/`actual_total` de esa sección ni en ningún total de `totals` (balance, saldo semanal, etc.), porque esa plata todavía no se movió. Su monto se expone aparte en `pending_total` por sección. Pasa a `is_pending: false` (y ahí sí empieza a contar) recién cuando termina de pagarse y el pagador lo confirma — ver 5.1.
 
+### PATCH /budget/:month/opening
+Corrige/siembra a mano los saldos de apertura del mes (`cash_balance`, `savings_balance`, `debt_balance`). Body: cualquier subconjunto de esos tres campos — al menos uno es requerido.
+
+```json
+{ "debt_balance": 300000 }
+```
+
+Es también la forma correcta de registrar una **deuda nueva** (no un pago a una deuda que ya tenías): sumale el monto al `debt_balance` actual. La sección `debt` de `GET /budget/:month` es solo para pagos hechos este mes (`debt_balance = saldo inicial − pagos del mes`) — crear ahí un ítem por una deuda nueva invertiría el signo del balance.
+
+**Recálculo hacia adelante:** si ya existen meses posteriores para este usuario (por haberlos abierto antes), sus `opening_*` se recalculan en cascada automáticamente para que el saldo siga fluyendo de un mes al otro — corregir agosto también corrige lo que septiembre había heredado mal. Esto mismo pasa automáticamente después de crear/editar/borrar un ítem o registrar un abono (`recomputeForwardChainForMonth` en `budgetSyncService.js`), no solo al tocar `opening` directo.
+
 ### POST /budget/:month/items
 Crea un ítem manual. Body: `{ section, label, budgeted_amount, actual_amount, is_savings_link }`.
 
