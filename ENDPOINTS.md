@@ -264,10 +264,13 @@ Respuesta `201`:
     "user_id_1": 1,
     "user_id_2": 2,
     "status": "pending",
+    "requested_by": 1,
     "created_at": "2026-04-24T12:00:00.000Z"
   }
 }
 ```
+
+`requested_by` guarda quién de los dos la mandó — es lo que distingue "recibida" de "enviada" en `GET /friends/requests` vs `GET /friends/requests/sent`, y lo que evita que puedas aceptar tu propia solicitud pegándole directo al endpoint (ver `PATCH /friends/:id/accept`).
 
 ### GET /friends
 Lista amigos con estado `accepted` del usuario autenticado.
@@ -294,7 +297,7 @@ Respuesta `200`:
 ```
 
 ### GET /friends/requests
-Lista las relaciones con estado `pending` asociadas al usuario autenticado.
+Lista las solicitudes con estado `pending` que **otros te enviaron a vos** — las únicas que podés aceptar/rechazar. Excluye las que vos mismo enviaste (`requested_by <> tu id`).
 
 Respuesta `200`:
 ```json
@@ -317,6 +320,9 @@ Respuesta `200`:
 }
 ```
 
+### GET /friends/requests/sent
+Lista las solicitudes con estado `pending` que **vos enviaste** y siguen esperando que el otro las acepte (`requested_by = tu id`). De solo lectura — no hay acción posible sobre ellas desde acá, solo esperar. Mismo formato de respuesta que `GET /friends/requests`.
+
 ### PATCH /friends/:id/accept
 Acepta una solicitud de amistad.
 
@@ -332,6 +338,7 @@ Validaciones principales:
 - La relación debe existir.
 - El usuario autenticado debe ser uno de los dos participantes.
 - El estado debe ser `pending`.
+- El usuario autenticado **no** debe ser quien la envió (`requested_by === userId` → `403`, "No puedes aceptar una solicitud que vos mismo enviaste") — antes de esto no había forma de distinguir remitente de destinatario y era posible auto-aceptar la propia solicitud pegándole directo al endpoint.
 
 Respuesta `200`:
 ```json
@@ -588,31 +595,37 @@ Respuesta `200`:
 }
 ```
 
-## 5.1) Liquidación de deudas (confirmación bilateral)
+## 5.1) Liquidación de deudas (confirmación bilateral, con abonos parciales)
 
-Un participante pasa por hasta 3 estados: `pending` → `paid_pending_confirmation` → `paid`. Hay 4 acciones:
+Un participante pasa por hasta 3 estados: `pending` → `paid_pending_confirmation` → `paid`. Además de `status`, cada participante acumula `amount_paid` (lo ya confirmado) y `pending_claim_amount` (lo reclamado, esperando confirmación) — así que un mismo gasto puede liquidarse en varios abonos, no solo de una vez. Hay 4 acciones, y las dos primeras aceptan un `amount` opcional en el body:
 
 ### PATCH /expenses/:id/claim
-El propio deudor avisa que ya pagó su parte. Solo puede marcarse a sí mismo, y solo si su estado actual es `pending`. Queda en `paid_pending_confirmation` esperando que el pagador confirme.
+El propio deudor avisa que pagó (parte o todo) de lo que debe. Solo puede marcarse a sí mismo, y solo si su estado actual es `pending`.
+
+Body opcional: `{ "amount": 20000 }` — si se omite, usa el saldo restante completo (`amount_owed − amount_paid`). Si `amount` supera el saldo restante, responde `400`.
+
+Queda en `paid_pending_confirmation` con `pending_claim_amount` = lo reclamado, esperando que el pagador confirme.
 
 Respuesta `200`:
 ```json
 {
   "message": "Marcado como pagado, esperando confirmación del pagador",
-  "participant": { "id": 5, "expense_id": 10, "user_id": 2, "amount_owed": 40000, "status": "paid_pending_confirmation", "paid_claimed_at": "2026-04-24T13:00:00.000Z", "confirmed_at": null }
+  "participant": { "id": 5, "expense_id": 10, "user_id": 2, "amount_owed": 40000, "amount_paid": 0, "pending_claim_amount": 20000, "status": "paid_pending_confirmation", "paid_claimed_at": "2026-04-24T13:00:00.000Z", "confirmed_at": null }
 }
 ```
 
 ### PATCH /expenses/:id/participants/:userId/mark-paid
-El pagador (`paid_by`) marca directamente a un participante como pagado (ej. pago en efectivo), sin pasar por la confirmación. Funciona desde cualquier estado que no sea ya `paid`.
+El pagador (`paid_by`) marca directamente a un participante como pagado, parcial o totalmente (ej. pago en efectivo), sin pasar por la confirmación. Mismo `amount` opcional que `/claim` (por defecto, el saldo restante). Funciona desde cualquier estado que no sea ya `paid`.
 
 ### PATCH /expenses/:id/participants/:userId/confirm
-El pagador confirma un claim existente. Solo funciona si el estado actual es `paid_pending_confirmation`.
+El pagador confirma un claim existente: `pending_claim_amount` pasa a sumarse a `amount_paid` y se limpia. Solo funciona si el estado actual es `paid_pending_confirmation`. El participante solo pasa a `status: "paid"` cuando `amount_paid` alcanza `amount_owed` — si quedó saldo, vuelve a `pending` para el próximo abono.
 
 ### PATCH /expenses/:id/participants/:userId/reject
-El pagador rechaza un claim existente (ej. el deudor se equivocó). Solo funciona si el estado actual es `paid_pending_confirmation`; vuelve a `pending`.
+El pagador rechaza un claim existente (ej. el deudor se equivocó). Solo funciona si el estado actual es `paid_pending_confirmation`; limpia `pending_claim_amount` y vuelve a `pending` (sin tocar `amount_paid`).
 
 Las 3 rutas con `:userId` solo pueden ser ejecutadas por quien creó el gasto (`paid_by`); si no, responden `403`.
+
+**Nota sobre `req.body`:** estas rutas no requieren body — Express deja `req.body` como `undefined` (no `{}`) cuando no hay header `Content-Type: application/json` (que es como llama el frontend al caso "pagar todo"), así que el acceso al `amount` opcional siempre usa `req.body?.amount`.
 
 ## 5.2) Presupuesto personal (`/budget`)
 
@@ -629,11 +642,11 @@ Respuesta `200`:
   "month": "2026-08-01T00:00:00.000Z",
   "opening": { "cash_balance": 0, "savings_balance": 0, "debt_balance": 0 },
   "sections": {
-    "income": { "items": [ { "id": 1, "section": "income", "label": "Salario", "budgeted_amount": 2000000, "actual_amount": 2000000, "is_savings_link": false, "linked_saving_item_id": null, "is_split_synced": false, "split_expense_id": null, "position": 0 } ], "budgeted_total": 2000000, "actual_total": 2000000 },
-    "fixed_expense": { "items": [], "budgeted_total": 0, "actual_total": 0 },
-    "tracked_expense": { "items": [], "budgeted_total": 0, "actual_total": 0 },
-    "saving": { "items": [], "budgeted_total": 0, "actual_total": 0 },
-    "debt": { "items": [], "budgeted_total": 0, "actual_total": 0 }
+    "income": { "items": [ { "id": 1, "section": "income", "label": "Salario", "budgeted_amount": 2000000, "actual_amount": 2000000, "is_savings_link": false, "linked_saving_item_id": null, "is_split_synced": false, "split_expense_id": null, "split_role": null, "is_pending": false, "position": 0 } ], "budgeted_total": 2000000, "actual_total": 2000000, "pending_total": 0 },
+    "fixed_expense": { "items": [], "budgeted_total": 0, "actual_total": 0, "pending_total": 0 },
+    "tracked_expense": { "items": [], "budgeted_total": 0, "actual_total": 0, "pending_total": 0 },
+    "saving": { "items": [], "budgeted_total": 0, "actual_total": 0, "pending_total": 0 },
+    "debt": { "items": [], "budgeted_total": 0, "actual_total": 0, "pending_total": 0 }
   },
   "totals": {
     "budgeted_net": 2000000,
@@ -649,6 +662,8 @@ Respuesta `200`:
 
 Fórmulas: `budgeted_net/actual_net = Ingreso − Gastos Fijos − Gastos`; `weekly_* = */4`; `balance = Saldo anterior + Ingreso − Gastos Fijos − Gastos + Ahorros − Deudas`; `savings_balance = Saldo anterior ahorros + Ahorros del mes`; `debt_balance = Saldo anterior deudas − Deudas del mes`.
 
+**`is_pending`:** un ítem con `is_pending: true` es una obligación *visible* (tu parte de un gasto compartido que todavía no pagaste de verdad) — aparece en `items` de su sección para que no se pierda de vista, pero **no** suma en `budgeted_total`/`actual_total` de esa sección ni en ningún total de `totals` (balance, saldo semanal, etc.), porque esa plata todavía no se movió. Su monto se expone aparte en `pending_total` por sección. Pasa a `is_pending: false` (y ahí sí empieza a contar) recién cuando termina de pagarse y el pagador lo confirma — ver 5.1.
+
 ### POST /budget/:month/items
 Crea un ítem manual. Body: `{ section, label, budgeted_amount, actual_amount, is_savings_link }`.
 
@@ -660,15 +675,23 @@ Edita un ítem manual. Togglear `is_savings_link` crea o borra el espejo en `sav
 
 Responde `400` si el ítem está sincronizado desde Split.it (`is_split_synced`), o si es el espejo automático de otro ítem — esos no se editan directamente.
 
+### PATCH /budget/items/:id/contribute
+Abono: suma `amount` a `actual_amount` de un ítem propio (usado para "meterle más plata" a un ahorro o deuda existente sin duplicar la fila). Body: `{ "amount": 50000 }` (`amount` debe ser positivo).
+
+Si el ítem tiene `linked_saving_item_id` (ej. un gasto marcado `is_savings_link`), el abono también se refleja en su espejo de `saving` (`actual_amount` **y** `budgeted_amount` suben ahí). Misma restricción que `PATCH`/`DELETE` para ítems sincronizados desde Split.it.
+
+Respuesta `200`: `{ "message": "Abono registrado", "item": { ...fila actualizada... } }`.
+
 ### DELETE /budget/items/:id
 Borra un ítem manual (y su espejo de ahorro si tenía uno). Misma restricción que `PATCH` para ítems sincronizados o espejos.
 
 ### Sincronización automática con Split.it
 No son endpoints propios — se generan solos al usar `/expenses`:
 
-- Al crear un gasto compartido, el pagador recibe un ítem `tracked_expense` por el monto completo (plata que salió de su bolsillo).
-- Cuando un participante liquida su parte (`mark-paid` o `confirm`), el ítem del pagador baja ese monto, y el deudor recibe su propio ítem `tracked_expense` por su parte, en el mes en que efectivamente pagó.
-- Editar o borrar el gasto compartido recalcula/elimina estos ítems.
+- Al crear un gasto compartido, el pagador recibe un ítem `tracked_expense` **confirmado** (`is_pending: false`) por el monto completo, en su propio mes — esa plata salió de su bolsillo de verdad. `split_role: "payer"`.
+- Cada otro participante recibe, en ese mismo momento y en **su propio mes actual**, un ítem `tracked_expense` **pendiente** (`is_pending: true`) por su parte — visible como obligación, pero fuera de sus totales hasta que la pague. `split_role: "participant"`.
+- Cada abono confirmado (`mark-paid`/`confirm`, ver 5.1) baja el ítem del pagador en ese monto exacto. Recién cuando el participante terminó de pagar el 100% de su parte, su ítem pasa a `is_pending: false` y empieza a contar en su balance.
+- Editar o borrar el gasto compartido recalcula/elimina estos ítems (payer + todos los participantes).
 
 ## 6) Errores comunes
 
