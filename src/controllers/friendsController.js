@@ -110,9 +110,9 @@ const getFriends = async (req, res) => {
     }
 };
 
-// Solicitudes que OTROS te enviaron a vos — las únicas que podés aceptar.
+// Solicitudes que OTROS te enviaron a tú — las únicas que puedes aceptar.
 // (Antes esto devolvía cualquier relación pendiente donde aparecieras,
-// incluidas las que vos mismo enviaste, lo que además de confuso en la UI
+// incluidas las que tú mismo enviaste, lo que además de confuso en la UI
 // permitía "aceptar" tu propia solicitud pegándole directo al endpoint,
 // ya que no había forma de distinguir quién la había enviado.)
 const getPendingRequests = async (req, res) => {
@@ -216,7 +216,7 @@ const acceptFriendship = async (req, res) => {
         }
 
         if (friendship.requested_by === userId) {
-            return res.status(403).json({ message: 'No puedes aceptar una solicitud que vos mismo enviaste' });
+            return res.status(403).json({ message: 'No puedes aceptar una solicitud que tú mismo enviaste' });
         }
 
         if (friendship.status !== 'pending') {

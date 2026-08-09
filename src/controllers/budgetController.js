@@ -45,9 +45,9 @@ const getMonth = async (req, res) => {
 
 // Un ítem de Gastos Fijos/Seguimiento puede vincularse a un ahorro que YA
 // EXISTE (nunca se crea uno nuevo en automático — "no se puede asignar
-// plata a un ahorro si este no está creado"). El aporte se aplica siempre
+// dinero a un ahorro si este no está creado"). El aporte se aplica siempre
 // como un INCREMENTO/decremento sobre el ahorro elegido, nunca
-// sobreescribiendo su monto total: el mismo ahorro puede recibir plata de
+// sobreescribiendo su monto total: el mismo ahorro puede recibir dinero de
 // más de un gasto vinculado, o de abonos manuales, y todos tienen que
 // sumarse entre sí en vez de pisarse.
 const applySavingsDelta = async (client, targetItemId, delta) => {
@@ -73,14 +73,14 @@ const validateSavingsTarget = async (client, userId, budgetMonthId, targetItemId
     );
     const target = result.rows[0];
     if (!target || target.section !== 'saving') {
-        return { error: { status: 400, message: 'El ahorro seleccionado no existe. Creá el ahorro primero desde la sección Ahorros.' } };
+        return { error: { status: 400, message: 'El ahorro seleccionado no existe. Crea el ahorro primero desde la sección Ahorros.' } };
     }
     if (target.budget_month_id !== budgetMonthId) {
         return { error: { status: 400, message: 'El ahorro tiene que estar en el mismo mes que este gasto' } };
     }
     const syncCheck = await client.query('SELECT id FROM budget_split_sync WHERE budget_item_id = $1', [targetItemId]);
     if (syncCheck.rows.length > 0) {
-        return { error: { status: 400, message: 'No podés vincular a un ítem sincronizado con Split.it' } };
+        return { error: { status: 400, message: 'No puedes vincular a un ítem sincronizado con Split.it' } };
     }
     return { item: target };
 };
@@ -306,8 +306,8 @@ const deleteItem = async (req, res) => {
     }
 };
 
-// Abono: suma plata a un ítem existente (típicamente en Ahorros o Deudas)
-// en vez de tener que crear una fila nueva cada vez que metés más plata al
+// Abono: suma dinero a un ítem existente (típicamente en Ahorros o Deudas)
+// en vez de tener que crear una fila nueva cada vez que metes más dinero al
 // mismo fondo/deuda. Si el ítem tiene un espejo de ahorro vinculado, el
 // abono se refleja en ambos para no desincronizarlos.
 const addContribution = async (req, res) => {

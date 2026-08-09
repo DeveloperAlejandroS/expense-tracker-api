@@ -508,7 +508,7 @@ const claimExpenseDebt = async (req, res) => {
             return res.status(400).json({ message: 'amount debe ser un número mayor a 0' });
         }
         if (claimAmount > remaining + 0.01) {
-            return res.status(400).json({ message: `No podés abonar más de lo que debés (te quedan ${remaining})` });
+            return res.status(400).json({ message: `No puedes abonar más de lo que debes (te quedan ${remaining})` });
         }
 
         const result = await db.query(
@@ -589,7 +589,7 @@ const markParticipantPaid = async (req, res) => {
             return res.status(400).json({ message: 'amount debe ser un número mayor a 0' });
         }
         if (payAmount > remaining + 0.01) {
-            return res.status(400).json({ message: `No podés marcar más de lo que debe (le quedan ${remaining})` });
+            return res.status(400).json({ message: `No puedes marcar más de lo que debe (le quedan ${remaining})` });
         }
 
         const isFullyPaid = payAmount >= remaining - 0.01;

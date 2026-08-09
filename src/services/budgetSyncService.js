@@ -57,7 +57,7 @@ const getOrCreateBudgetMonth = async (client, userId, monthDate) => {
 // Los ítems con is_pending=true (obligaciones de un gasto compartido que
 // todavía no pagaste de verdad) se listan igual dentro de cada sección para
 // que sean visibles, pero NO suman en budgeted_total/actual_total ni en
-// ningún total global — esos solo reflejan plata que ya se movió de
+// ningún total global — esos solo reflejan dinero que ya se movió de
 // verdad. Se exponen aparte en `pending_total` por sección.
 const computeMonthTotals = async (client, budgetMonth) => {
     const itemsResult = await client.query(
@@ -119,9 +119,9 @@ const computeMonthTotals = async (client, budgetMonth) => {
     // `balance` es "patrimonio líquido" del mes: incluye lo que se apartó a
     // Ahorros (con el `+Ahorros` cancelando la resta que ese mismo monto ya
     // generó en Gastos Fijos/Seguimiento cuando el ítem está vinculado a un
-    // ahorro). Pero esa plata NO es caja disponible para gastar — vive en
+    // ahorro). Pero ese dinero NO es caja disponible para gastar — vive en
     // `savings_balance`, aparte. Si el mes siguiente arranca su
-    // `opening_cash_balance` copiando `balance` tal cual, la plata ahorrada
+    // `opening_cash_balance` copiando `balance` tal cual, el dinero ahorrado
     // este mes queda contada DOS VECES hacia adelante: una en el saldo de
     // caja del mes que viene, y otra en `opening_savings_balance` (que
     // también arrastra `savings_balance`). `carryForwardCash` es la versión
@@ -146,7 +146,7 @@ const computeMonthTotals = async (client, budgetMonth) => {
 
 // Recalcula en cascada los `opening_*` de todos los meses de `userId` que ya
 // existan DESPUÉS de `monthDate`, encadenando el cierre de cada mes con la
-// apertura del siguiente. Sin esto, si abonás a un ahorro/deuda o corregís
+// apertura del siguiente. Sin esto, si abonas a un ahorro/deuda o corriges
 // un saldo inicial DESPUÉS de que el mes siguiente ya se había creado (por
 // haberlo abierto una vez), ese mes queda con una apertura vieja — el saldo
 // no fluye de un mes al otro como debería. Se corta apenas encuentra un mes
@@ -200,7 +200,7 @@ const recomputeForwardChainForMonth = async (client, budgetMonthId) => {
 // Se llama al crear (o re-crear en un edit) un gasto compartido:
 // - El pagador recibe un ítem CONFIRMADO por SU PROPIA parte (shares.get
 //   (paid_by)), no por el monto total — lo que otros le deben no es un
-//   gasto suyo, es plata que va a recuperar. Antes esto se creaba por el
+//   gasto suyo, es dinero que va a recuperar. Antes esto se creaba por el
 //   monto completo, lo que inflaba "Gastos" incluso cuando la parte del
 //   pagador era $0 (ej. le prestaste/vendiste algo a alguien y te debe
 //   el 100%): no gastaste nada, pero igual aparecía como si lo hubieras
@@ -209,7 +209,7 @@ const recomputeForwardChainForMonth = async (client, budgetMonthId) => {
 //   propio mes actual — visible como obligación, pero no cuenta en su
 //   Balance hasta que la pague de verdad y se confirme.
 // - Lo que te devuelvan después (ver onParticipantSettled) entra como
-//   Ingreso en el mes en que de verdad lo recibís, no como una resta a
+//   Ingreso en el mes en que de verdad lo recibes, no como una resta a
 //   este ítem.
 const onExpenseCreated = async (client, expense, shares) => {
     const payerMonth = await getOrCreateBudgetMonth(client, expense.paid_by, expense.created_at);
@@ -291,7 +291,7 @@ const onExpenseDeleted = async (client, expenseId) => {
 
 // Se llama con cada abono (parcial o total) que un participante paga de
 // verdad — `incrementAmount` es lo que se acaba de pagar en esta pasada, no
-// el total de la deuda. Al pagador esa plata le entra como INGRESO (un
+// el total de la deuda. Al pagador ese dinero le entra como INGRESO (un
 // "Reembolso: <descripción>") en su mes actual — no como una resta a su
 // ítem de Gastos, que ya solo representa su propia parte y no debería
 // moverse por esto. Y, solo si con este abono la deuda queda 100% saldada,

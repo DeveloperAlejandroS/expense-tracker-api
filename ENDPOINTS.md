@@ -297,7 +297,7 @@ Respuesta `200`:
 ```
 
 ### GET /friends/requests
-Lista las solicitudes con estado `pending` que **otros te enviaron a vos** — las únicas que podés aceptar/rechazar. Excluye las que vos mismo enviaste (`requested_by <> tu id`).
+Lista las solicitudes con estado `pending` que **otros te enviaron a ti** — las únicas que puedes aceptar/rechazar. Excluye las que tú mismo enviaste (`requested_by <> tu id`).
 
 Respuesta `200`:
 ```json
@@ -321,7 +321,7 @@ Respuesta `200`:
 ```
 
 ### GET /friends/requests/sent
-Lista las solicitudes con estado `pending` que **vos enviaste** y siguen esperando que el otro las acepte (`requested_by = tu id`). De solo lectura — no hay acción posible sobre ellas desde acá, solo esperar. Mismo formato de respuesta que `GET /friends/requests`.
+Lista las solicitudes con estado `pending` que **tú enviaste** y siguen esperando que el otro las acepte (`requested_by = tu id`). De solo lectura — no hay acción posible sobre ellas desde aquí, solo esperar. Mismo formato de respuesta que `GET /friends/requests`.
 
 ### PATCH /friends/:id/accept
 Acepta una solicitud de amistad.
@@ -338,7 +338,7 @@ Validaciones principales:
 - La relación debe existir.
 - El usuario autenticado debe ser uno de los dos participantes.
 - El estado debe ser `pending`.
-- El usuario autenticado **no** debe ser quien la envió (`requested_by === userId` → `403`, "No puedes aceptar una solicitud que vos mismo enviaste") — antes de esto no había forma de distinguir remitente de destinatario y era posible auto-aceptar la propia solicitud pegándole directo al endpoint.
+- El usuario autenticado **no** debe ser quien la envió (`requested_by === userId` → `403`, "No puedes aceptar una solicitud que tú mismo enviaste") — antes de esto no había forma de distinguir remitente de destinatario y era posible auto-aceptar la propia solicitud pegándole directo al endpoint.
 
 Respuesta `200`:
 ```json
@@ -662,9 +662,9 @@ Respuesta `200`:
 
 Fórmulas: `budgeted_net/actual_net = Ingreso − Gastos Fijos − Gastos`; `weekly_* = */4`; `balance = Saldo anterior + Ingreso − Gastos Fijos − Gastos + Ahorros − Deudas` (patrimonio líquido del mes, incluye lo apartado a Ahorros); `savings_balance = Saldo anterior ahorros + Ahorros del mes`; `debt_balance = Saldo anterior deudas − Deudas del mes`; `carry_forward_cash = balance − Ahorros del mes` (caja realmente disponible, sin la parte ya apartada).
 
-**`carry_forward_cash` vs. `balance`:** `balance` es cuánto valés en total este mes (caja + lo que apartaste a ahorros), pero esa plata ahorrada no es gastable — ya vive aparte en `savings_balance`. Por eso el mes siguiente NO hereda `opening_cash_balance` desde `balance` sino desde `carry_forward_cash`: si se usara `balance` directo, lo apartado a ahorros quedaría contado dos veces hacia adelante (una vez en la caja del mes que viene, y otra en `opening_savings_balance`, que también arrastra `savings_balance`).
+**`carry_forward_cash` vs. `balance`:** `balance` es cuánto vales en total este mes (caja + lo que apartaste a ahorros), pero ese dinero ahorrado no es gastable — ya vive aparte en `savings_balance`. Por eso el mes siguiente NO hereda `opening_cash_balance` desde `balance` sino desde `carry_forward_cash`: si se usara `balance` directo, lo apartado a ahorros quedaría contado dos veces hacia adelante (una vez en la caja del mes que viene, y otra en `opening_savings_balance`, que también arrastra `savings_balance`).
 
-**`is_pending`:** un ítem con `is_pending: true` es una obligación *visible* (tu parte de un gasto compartido que todavía no pagaste de verdad) — aparece en `items` de su sección para que no se pierda de vista, pero **no** suma en `budgeted_total`/`actual_total` de esa sección ni en ningún total de `totals` (balance, saldo semanal, etc.), porque esa plata todavía no se movió. Su monto se expone aparte en `pending_total` por sección. Pasa a `is_pending: false` (y ahí sí empieza a contar) recién cuando termina de pagarse y el pagador lo confirma — ver 5.1.
+**`is_pending`:** un ítem con `is_pending: true` es una obligación *visible* (tu parte de un gasto compartido que todavía no pagaste de verdad) — aparece en `items` de su sección para que no se pierda de vista, pero **no** suma en `budgeted_total`/`actual_total` de esa sección ni en ningún total de `totals` (balance, saldo semanal, etc.), porque ese dinero todavía no se movió. Su monto se expone aparte en `pending_total` por sección. Pasa a `is_pending: false` (y ahí sí empieza a contar) recién cuando termina de pagarse y el pagador lo confirma — ver 5.1.
 
 ### PATCH /budget/:month/opening
 Corrige/siembra a mano los saldos de apertura del mes (`cash_balance`, `savings_balance`, `debt_balance`). Body: cualquier subconjunto de esos tres campos — al menos uno es requerido.
@@ -673,7 +673,7 @@ Corrige/siembra a mano los saldos de apertura del mes (`cash_balance`, `savings_
 { "debt_balance": 300000 }
 ```
 
-Es también la forma correcta de registrar una **deuda nueva** (no un pago a una deuda que ya tenías): sumale el monto al `debt_balance` actual. La sección `debt` de `GET /budget/:month` es solo para pagos hechos este mes (`debt_balance = saldo inicial − pagos del mes`) — crear ahí un ítem por una deuda nueva invertiría el signo del balance.
+Es también la forma correcta de registrar una **deuda nueva** (no un pago a una deuda que ya tenías): súmale el monto al `debt_balance` actual. La sección `debt` de `GET /budget/:month` es solo para pagos hechos este mes (`debt_balance = saldo inicial − pagos del mes`) — crear ahí un ítem por una deuda nueva invertiría el signo del balance.
 
 **Recálculo hacia adelante:** si ya existen meses posteriores para este usuario (por haberlos abierto antes), sus `opening_*` se recalculan en cascada automáticamente para que el saldo siga fluyendo de un mes al otro — corregir agosto también corrige lo que septiembre había heredado mal. Esto mismo pasa automáticamente después de crear/editar/borrar un ítem o registrar un abono (`recomputeForwardChainForMonth` en `budgetSyncService.js`), no solo al tocar `opening` directo.
 
@@ -689,7 +689,7 @@ Edita un ítem manual. Mismo `link_to_saving_item_id` que en el create — manda
 Responde `400` si el ítem está sincronizado desde Split.it (`is_split_synced`) — esos no se editan directamente.
 
 ### PATCH /budget/items/:id/contribute
-Abono: suma `amount` a `actual_amount` de un ítem propio (usado para "meterle más plata" a un ahorro o deuda existente sin duplicar la fila). Body: `{ "amount": 50000 }` (`amount` debe ser positivo).
+Abono: suma `amount` a `actual_amount` de un ítem propio (usado para "meterle más dinero" a un ahorro o deuda existente sin duplicar la fila). Body: `{ "amount": 50000 }` (`amount` debe ser positivo).
 
 Si el ítem tiene `linked_saving_item_id` (fue vinculado vía `link_to_saving_item_id`), el abono también se suma al ahorro vinculado (`actual_amount` **y** `budgeted_amount` suben ahí). Misma restricción que `PATCH`/`DELETE` para ítems sincronizados desde Split.it.
 
@@ -701,7 +701,7 @@ Borra un ítem manual. Si estaba vinculado a un ahorro (`linked_saving_item_id`)
 ### Sincronización automática con Split.it
 No son endpoints propios — se generan solos al usar `/expenses`:
 
-- Al crear un gasto compartido, el pagador recibe un ítem `tracked_expense` **confirmado** (`is_pending: false`) por **su propia parte** (`shares.get(paid_by)`, no el monto total), en su propio mes — lo que le corresponde a otros no es un gasto suyo, es plata que va a recuperar. `split_role: "payer"`. (Antes esto se creaba por el monto completo, lo que inflaba "Gastos" incluso cuando la parte del pagador era $0 — por ejemplo, si le prestás/vendés algo a alguien y te debe el 100%, vos no gastaste nada.)
+- Al crear un gasto compartido, el pagador recibe un ítem `tracked_expense` **confirmado** (`is_pending: false`) por **su propia parte** (`shares.get(paid_by)`, no el monto total), en su propio mes — lo que le corresponde a otros no es un gasto suyo, es dinero que va a recuperar. `split_role: "payer"`. (Antes esto se creaba por el monto completo, lo que inflaba "Gastos" incluso cuando la parte del pagador era $0 — por ejemplo, si le prestas o le vendes algo a alguien y te debe el 100%, tú no gastaste nada.)
 - Cada otro participante recibe, en ese mismo momento y en **su propio mes actual**, un ítem `tracked_expense` **pendiente** (`is_pending: true`) por su parte — visible como obligación, pero fuera de sus totales hasta que la pague. `split_role: "participant"`.
 - Cada abono confirmado (`mark-paid`/`confirm`, ver 5.1) genera o incrementa, en el mes actual del **pagador**, un ítem `income` **"Reembolso: `<descripción>`"** por ese monto exacto — la devolución entra como Ingreso real, no como una resta al ítem de Gastos del pagador (que ya no se toca después de creado). `split_role: "payer_income"`. Puede haber varios de estos por el mismo gasto si los abonos caen en meses distintos. Recién cuando el participante terminó de pagar el 100% de su parte, su propio ítem pasa a `is_pending: false` y empieza a contar en su balance.
 - Editar o borrar el gasto compartido recalcula/elimina todos estos ítems (payer, participantes y cualquier reembolso ya recibido).
