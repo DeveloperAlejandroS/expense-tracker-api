@@ -33,7 +33,7 @@ const getOrCreateBudgetMonth = async (client, userId, monthDate) => {
         const previousMonth = previousResult.rows[0];
         const { totals } = await computeMonthTotals(client, previousMonth);
         opening = {
-            cash: totals.balance,
+            cash: totals.carry_forward_cash,
             savings: totals.savings_balance,
             debt: totals.debt_balance,
         };
@@ -116,6 +116,19 @@ const computeMonthTotals = async (client, budgetMonth) => {
     const savingsBalance = Number(budgetMonth.opening_savings_balance) + sections.saving.actual_total;
     const debtBalance = Number(budgetMonth.opening_debt_balance) - sections.debt.actual_total;
 
+    // `balance` es "patrimonio líquido" del mes: incluye lo que se apartó a
+    // Ahorros (con el `+Ahorros` cancelando la resta que ese mismo monto ya
+    // generó en Gastos Fijos/Seguimiento cuando el ítem está vinculado a un
+    // ahorro). Pero esa plata NO es caja disponible para gastar — vive en
+    // `savings_balance`, aparte. Si el mes siguiente arranca su
+    // `opening_cash_balance` copiando `balance` tal cual, la plata ahorrada
+    // este mes queda contada DOS VECES hacia adelante: una en el saldo de
+    // caja del mes que viene, y otra en `opening_savings_balance` (que
+    // también arrastra `savings_balance`). `carryForwardCash` es la versión
+    // correcta para heredar: la caja realmente disponible, sin la parte que
+    // ya está separada como ahorro.
+    const carryForwardCash = balance - sections.saving.actual_total;
+
     return {
         sections,
         totals: {
@@ -126,6 +139,7 @@ const computeMonthTotals = async (client, budgetMonth) => {
             balance,
             savings_balance: savingsBalance,
             debt_balance: debtBalance,
+            carry_forward_cash: carryForwardCash,
         },
     };
 };
@@ -159,7 +173,7 @@ const recomputeForwardChain = async (client, userId, monthDate) => {
         if (!nextMonth) return;
 
         const alreadyUpToDate =
-            Number(nextMonth.opening_cash_balance) === totals.balance &&
+            Number(nextMonth.opening_cash_balance) === totals.carry_forward_cash &&
             Number(nextMonth.opening_savings_balance) === totals.savings_balance &&
             Number(nextMonth.opening_debt_balance) === totals.debt_balance;
 
@@ -167,7 +181,7 @@ const recomputeForwardChain = async (client, userId, monthDate) => {
 
         await client.query(
             'UPDATE budget_months SET opening_cash_balance = $1, opening_savings_balance = $2, opening_debt_balance = $3 WHERE id = $4',
-            [totals.balance, totals.savings_balance, totals.debt_balance, nextMonth.id]
+            [totals.carry_forward_cash, totals.savings_balance, totals.debt_balance, nextMonth.id]
         );
 
         cursor = toMonthDate(nextMonth.month);

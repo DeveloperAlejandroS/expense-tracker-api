@@ -660,7 +660,9 @@ Respuesta `200`:
 }
 ```
 
-Fórmulas: `budgeted_net/actual_net = Ingreso − Gastos Fijos − Gastos`; `weekly_* = */4`; `balance = Saldo anterior + Ingreso − Gastos Fijos − Gastos + Ahorros − Deudas`; `savings_balance = Saldo anterior ahorros + Ahorros del mes`; `debt_balance = Saldo anterior deudas − Deudas del mes`.
+Fórmulas: `budgeted_net/actual_net = Ingreso − Gastos Fijos − Gastos`; `weekly_* = */4`; `balance = Saldo anterior + Ingreso − Gastos Fijos − Gastos + Ahorros − Deudas` (patrimonio líquido del mes, incluye lo apartado a Ahorros); `savings_balance = Saldo anterior ahorros + Ahorros del mes`; `debt_balance = Saldo anterior deudas − Deudas del mes`; `carry_forward_cash = balance − Ahorros del mes` (caja realmente disponible, sin la parte ya apartada).
+
+**`carry_forward_cash` vs. `balance`:** `balance` es cuánto valés en total este mes (caja + lo que apartaste a ahorros), pero esa plata ahorrada no es gastable — ya vive aparte en `savings_balance`. Por eso el mes siguiente NO hereda `opening_cash_balance` desde `balance` sino desde `carry_forward_cash`: si se usara `balance` directo, lo apartado a ahorros quedaría contado dos veces hacia adelante (una vez en la caja del mes que viene, y otra en `opening_savings_balance`, que también arrastra `savings_balance`).
 
 **`is_pending`:** un ítem con `is_pending: true` es una obligación *visible* (tu parte de un gasto compartido que todavía no pagaste de verdad) — aparece en `items` de su sección para que no se pierda de vista, pero **no** suma en `budgeted_total`/`actual_total` de esa sección ni en ningún total de `totals` (balance, saldo semanal, etc.), porque esa plata todavía no se movió. Su monto se expone aparte en `pending_total` por sección. Pasa a `is_pending: false` (y ahí sí empieza a contar) recién cuando termina de pagarse y el pagador lo confirma — ver 5.1.
 
@@ -676,25 +678,25 @@ Es también la forma correcta de registrar una **deuda nueva** (no un pago a una
 **Recálculo hacia adelante:** si ya existen meses posteriores para este usuario (por haberlos abierto antes), sus `opening_*` se recalculan en cascada automáticamente para que el saldo siga fluyendo de un mes al otro — corregir agosto también corrige lo que septiembre había heredado mal. Esto mismo pasa automáticamente después de crear/editar/borrar un ítem o registrar un abono (`recomputeForwardChainForMonth` en `budgetSyncService.js`), no solo al tocar `opening` directo.
 
 ### POST /budget/:month/items
-Crea un ítem manual. Body: `{ section, label, budgeted_amount, actual_amount, is_savings_link }`.
+Crea un ítem manual. Body: `{ section, label, budgeted_amount, actual_amount, link_to_saving_item_id }`.
 
 - `section`: uno de `income`, `fixed_expense`, `tracked_expense`, `saving`, `debt`.
-- `is_savings_link` (solo válido en `fixed_expense`/`tracked_expense`): si es `true`, crea automáticamente un ítem espejo en `saving` — reemplaza la doble carga manual.
+- `link_to_saving_item_id` (opcional, solo válido en `fixed_expense`/`tracked_expense`): id de un ítem **que ya exista** en la sección `saving`, del mismo mes. Si se manda, el `actual_amount` de este ítem se **suma** (no reemplaza) al ítem de ahorro elegido — nunca se crea un ahorro nuevo en automático. Si el id no existe, no es tuyo, no está en `saving`, o no es del mismo mes, responde `400`. `is_savings_link` en la respuesta queda como `true`/`false` según si quedó vinculado, pero ya no se manda como input.
 
 ### PATCH /budget/items/:id
-Edita un ítem manual. Togglear `is_savings_link` crea o borra el espejo en `saving` según corresponda.
+Edita un ítem manual. Mismo `link_to_saving_item_id` que en el create — mandarlo `null` desvincula el ítem (revierte el aporte que le había hecho al ahorro). Cambiar de un ahorro a otro revierte el aporte del viejo destino y lo aplica al nuevo; cambiar el `actual_amount` de un ítem ya vinculado aplica solo la diferencia al ahorro, no lo pisa.
 
-Responde `400` si el ítem está sincronizado desde Split.it (`is_split_synced`), o si es el espejo automático de otro ítem — esos no se editan directamente.
+Responde `400` si el ítem está sincronizado desde Split.it (`is_split_synced`) — esos no se editan directamente.
 
 ### PATCH /budget/items/:id/contribute
 Abono: suma `amount` a `actual_amount` de un ítem propio (usado para "meterle más plata" a un ahorro o deuda existente sin duplicar la fila). Body: `{ "amount": 50000 }` (`amount` debe ser positivo).
 
-Si el ítem tiene `linked_saving_item_id` (ej. un gasto marcado `is_savings_link`), el abono también se refleja en su espejo de `saving` (`actual_amount` **y** `budgeted_amount` suben ahí). Misma restricción que `PATCH`/`DELETE` para ítems sincronizados desde Split.it.
+Si el ítem tiene `linked_saving_item_id` (fue vinculado vía `link_to_saving_item_id`), el abono también se suma al ahorro vinculado (`actual_amount` **y** `budgeted_amount` suben ahí). Misma restricción que `PATCH`/`DELETE` para ítems sincronizados desde Split.it.
 
 Respuesta `200`: `{ "message": "Abono registrado", "item": { ...fila actualizada... } }`.
 
 ### DELETE /budget/items/:id
-Borra un ítem manual (y su espejo de ahorro si tenía uno). Misma restricción que `PATCH` para ítems sincronizados o espejos.
+Borra un ítem manual. Si estaba vinculado a un ahorro (`linked_saving_item_id`), revierte el aporte que le había hecho — el ahorro en sí **no se borra**, sigue existiendo como el ítem independiente que siempre fue. Misma restricción que `PATCH` para ítems sincronizados.
 
 ### Sincronización automática con Split.it
 No son endpoints propios — se generan solos al usar `/expenses`:

@@ -43,28 +43,46 @@ const getMonth = async (req, res) => {
     }
 };
 
-// Crea (o actualiza, si ya existía) el budget_item espejo en la sección
-// `saving` para un ítem marcado como `is_savings_link`.
-const upsertSavingsMirror = async (client, sourceItem, existingLinkedId) => {
-    const label = `Ahorro · ${sourceItem.label}`;
-
-    if (existingLinkedId) {
-        const updated = await client.query(
-            'UPDATE budget_items SET label = $1, budgeted_amount = $2, actual_amount = $2, updated_at = now() WHERE id = $3 RETURNING id',
-            [label, sourceItem.actual_amount, existingLinkedId]
-        );
-        if (updated.rows.length > 0) return existingLinkedId;
-    }
-
-    const created = await client.query(
-        `
-        INSERT INTO budget_items (budget_month_id, section, label, budgeted_amount, actual_amount)
-        VALUES ($1, 'saving', $2, $3, $3)
-        RETURNING id
-        `,
-        [sourceItem.budget_month_id, label, sourceItem.actual_amount]
+// Un ítem de Gastos Fijos/Seguimiento puede vincularse a un ahorro que YA
+// EXISTE (nunca se crea uno nuevo en automático — "no se puede asignar
+// plata a un ahorro si este no está creado"). El aporte se aplica siempre
+// como un INCREMENTO/decremento sobre el ahorro elegido, nunca
+// sobreescribiendo su monto total: el mismo ahorro puede recibir plata de
+// más de un gasto vinculado, o de abonos manuales, y todos tienen que
+// sumarse entre sí en vez de pisarse.
+const applySavingsDelta = async (client, targetItemId, delta) => {
+    if (!targetItemId || delta === 0) return;
+    await client.query(
+        'UPDATE budget_items SET budgeted_amount = budgeted_amount + $1, actual_amount = actual_amount + $1, updated_at = now() WHERE id = $2',
+        [delta, targetItemId]
     );
-    return created.rows[0].id;
+};
+
+// Valida que `targetItemId` sea un ahorro real: existe, es tuyo, está en la
+// sección `saving`, vive en el mismo mes que el gasto que se quiere
+// vincular, y no es un ítem sincronizado desde Split.it.
+const validateSavingsTarget = async (client, userId, budgetMonthId, targetItemId) => {
+    const result = await client.query(
+        `
+        SELECT bi.id, bi.section, bi.budget_month_id
+        FROM budget_items bi
+        INNER JOIN budget_months bm ON bm.id = bi.budget_month_id
+        WHERE bi.id = $1 AND bm.user_id = $2
+        `,
+        [targetItemId, userId]
+    );
+    const target = result.rows[0];
+    if (!target || target.section !== 'saving') {
+        return { error: { status: 400, message: 'El ahorro seleccionado no existe. Creá el ahorro primero desde la sección Ahorros.' } };
+    }
+    if (target.budget_month_id !== budgetMonthId) {
+        return { error: { status: 400, message: 'El ahorro tiene que estar en el mismo mes que este gasto' } };
+    }
+    const syncCheck = await client.query('SELECT id FROM budget_split_sync WHERE budget_item_id = $1', [targetItemId]);
+    if (syncCheck.rows.length > 0) {
+        return { error: { status: 400, message: 'No podés vincular a un ítem sincronizado con Split.it' } };
+    }
+    return { item: target };
 };
 
 const createItem = async (req, res) => {
@@ -74,7 +92,7 @@ const createItem = async (req, res) => {
     try {
         const userId = req.user.id;
         const monthDate = parseMonthParam(req.params.month);
-        const { section, label, budgeted_amount: budgetedAmount, actual_amount: actualAmount, is_savings_link: isSavingsLink } = req.body;
+        const { section, label, budgeted_amount: budgetedAmount, actual_amount: actualAmount, link_to_saving_item_id: linkToSavingItemId } = req.body;
 
         if (!monthDate) {
             return res.status(400).json({ message: 'El mes debe tener formato YYYY-MM' });
@@ -90,9 +108,24 @@ const createItem = async (req, res) => {
         if (budgeted < 0 || actual < 0) {
             return res.status(400).json({ message: 'Los montos no pueden ser negativos' });
         }
-        const savingsLink = Boolean(isSavingsLink) && SAVINGS_LINK_SECTIONS.includes(section);
+
+        let targetSavingItemId = null;
+        if (linkToSavingItemId !== undefined && linkToSavingItemId !== null) {
+            if (!SAVINGS_LINK_SECTIONS.includes(section)) {
+                return res.status(400).json({ message: 'Solo los ítems de Gastos Fijos o Seguimiento pueden vincularse a un ahorro' });
+            }
+            targetSavingItemId = Number(linkToSavingItemId);
+            if (!Number.isInteger(targetSavingItemId) || targetSavingItemId <= 0) {
+                return res.status(400).json({ message: 'link_to_saving_item_id debe ser un entero positivo' });
+            }
+        }
 
         const budgetMonth = await getOrCreateBudgetMonth(client, userId, monthDate);
+
+        if (targetSavingItemId) {
+            const { error: targetError } = await validateSavingsTarget(client, userId, budgetMonth.id, targetSavingItemId);
+            if (targetError) return res.status(targetError.status).json({ message: targetError.message });
+        }
 
         await client.query('BEGIN');
         transactionStarted = true;
@@ -104,22 +137,17 @@ const createItem = async (req, res) => {
 
         const inserted = await client.query(
             `
-            INSERT INTO budget_items (budget_month_id, section, label, budgeted_amount, actual_amount, is_savings_link, position)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO budget_items (budget_month_id, section, label, budgeted_amount, actual_amount, is_savings_link, linked_saving_item_id, position)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             `,
-            [budgetMonth.id, section, label.trim(), budgeted, actual, savingsLink, positionResult.rows[0].next_position]
+            [budgetMonth.id, section, label.trim(), budgeted, actual, targetSavingItemId != null, targetSavingItemId, positionResult.rows[0].next_position]
         );
 
-        let item = inserted.rows[0];
+        const item = inserted.rows[0];
 
-        if (savingsLink) {
-            const linkedId = await upsertSavingsMirror(client, { ...item, budget_month_id: budgetMonth.id }, null);
-            const updated = await client.query(
-                'UPDATE budget_items SET linked_saving_item_id = $1 WHERE id = $2 RETURNING *',
-                [linkedId, item.id]
-            );
-            item = updated.rows[0];
+        if (targetSavingItemId) {
+            await applySavingsDelta(client, targetSavingItemId, actual);
         }
 
         await recomputeForwardChainForMonth(client, budgetMonth.id);
@@ -137,7 +165,7 @@ const createItem = async (req, res) => {
 };
 
 // Trae un budget_item validando que pertenezca al usuario autenticado, y
-// si está sincronizado desde Split.it o es el espejo de otro ítem.
+// que no esté sincronizado desde Split.it (esos no se editan directamente).
 const loadOwnedItem = async (client, itemId, userId) => {
     const result = await client.query(
         `
@@ -154,11 +182,6 @@ const loadOwnedItem = async (client, itemId, userId) => {
     const syncResult = await client.query('SELECT id FROM budget_split_sync WHERE budget_item_id = $1', [itemId]);
     if (syncResult.rows.length > 0) {
         return { error: { status: 400, message: 'Este ítem está sincronizado con Split.it y no se puede editar directamente' } };
-    }
-
-    const mirrorOfResult = await client.query('SELECT id FROM budget_items WHERE linked_saving_item_id = $1', [itemId]);
-    if (mirrorOfResult.rows.length > 0) {
-        return { error: { status: 400, message: 'Este es el espejo automático de un ahorro — editalo desde el ítem original' } };
     }
 
     return { item };
@@ -178,33 +201,46 @@ const updateItem = async (req, res) => {
         const { error, item } = await loadOwnedItem(client, itemId, userId);
         if (error) return res.status(error.status).json({ message: error.message });
 
-        const { label, budgeted_amount: budgetedAmount, actual_amount: actualAmount, is_savings_link: isSavingsLink } = req.body;
+        const { label, budgeted_amount: budgetedAmount, actual_amount: actualAmount } = req.body;
+        const linkProvided = Object.prototype.hasOwnProperty.call(req.body, 'link_to_saving_item_id');
 
         const nextLabel = label !== undefined ? String(label).trim() : item.label;
         const nextBudgeted = budgetedAmount !== undefined ? Number(budgetedAmount) || 0 : Number(item.budgeted_amount);
         const nextActual = actualAmount !== undefined ? Number(actualAmount) || 0 : Number(item.actual_amount);
-        const nextSavingsLink = isSavingsLink !== undefined
-            ? Boolean(isSavingsLink) && SAVINGS_LINK_SECTIONS.includes(item.section)
-            : item.is_savings_link;
 
         if (nextBudgeted < 0 || nextActual < 0) {
             return res.status(400).json({ message: 'Los montos no pueden ser negativos' });
         }
 
+        const oldLinkedSavingItemId = item.linked_saving_item_id;
+        let nextLinkedSavingItemId = oldLinkedSavingItemId;
+        if (linkProvided) {
+            const raw = req.body.link_to_saving_item_id;
+            nextLinkedSavingItemId = raw === null || raw === undefined ? null : Number(raw);
+            if (nextLinkedSavingItemId && !SAVINGS_LINK_SECTIONS.includes(item.section)) {
+                return res.status(400).json({ message: 'Solo los ítems de Gastos Fijos o Seguimiento pueden vincularse a un ahorro' });
+            }
+            if (nextLinkedSavingItemId) {
+                const { error: targetError } = await validateSavingsTarget(client, userId, item.budget_month_id, nextLinkedSavingItemId);
+                if (targetError) return res.status(targetError.status).json({ message: targetError.message });
+            }
+        }
+
         await client.query('BEGIN');
         transactionStarted = true;
 
-        let linkedSavingItemId = item.linked_saving_item_id;
+        const oldActual = Number(item.actual_amount);
 
-        if (nextSavingsLink) {
-            linkedSavingItemId = await upsertSavingsMirror(
-                client,
-                { label: nextLabel, actual_amount: nextActual, budget_month_id: item.budget_month_id },
-                linkedSavingItemId
-            );
-        } else if (item.linked_saving_item_id) {
-            await client.query('DELETE FROM budget_items WHERE id = $1', [item.linked_saving_item_id]);
-            linkedSavingItemId = null;
+        // Revierte el aporte viejo si se desvinculó o cambió de destino.
+        if (oldLinkedSavingItemId && oldLinkedSavingItemId !== nextLinkedSavingItemId) {
+            await applySavingsDelta(client, oldLinkedSavingItemId, -oldActual);
+        }
+        // Aplica el aporte nuevo: si el destino es el mismo de antes, solo la
+        // diferencia entre el monto viejo y el nuevo; si es un destino nuevo
+        // (o recién se vinculó), el monto completo.
+        if (nextLinkedSavingItemId) {
+            const delta = oldLinkedSavingItemId === nextLinkedSavingItemId ? nextActual - oldActual : nextActual;
+            await applySavingsDelta(client, nextLinkedSavingItemId, delta);
         }
 
         const updated = await client.query(
@@ -214,7 +250,7 @@ const updateItem = async (req, res) => {
             WHERE id = $6
             RETURNING *
             `,
-            [nextLabel, nextBudgeted, nextActual, nextSavingsLink, linkedSavingItemId, itemId]
+            [nextLabel, nextBudgeted, nextActual, nextLinkedSavingItemId != null, nextLinkedSavingItemId, itemId]
         );
 
         await recomputeForwardChainForMonth(client, item.budget_month_id);
@@ -248,8 +284,11 @@ const deleteItem = async (req, res) => {
         await client.query('BEGIN');
         transactionStarted = true;
 
+        // El ahorro vinculado ya NO es un espejo que se borra junto con esto
+        // — es un ítem independiente que el usuario creó a mano. Borrar este
+        // gasto solo revierte el aporte que le había hecho.
         if (item.linked_saving_item_id) {
-            await client.query('DELETE FROM budget_items WHERE id = $1', [item.linked_saving_item_id]);
+            await applySavingsDelta(client, item.linked_saving_item_id, -Number(item.actual_amount));
         }
         await client.query('DELETE FROM budget_items WHERE id = $1', [itemId]);
 
