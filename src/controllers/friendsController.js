@@ -9,7 +9,7 @@ const canonicalPair = (userId1, userId2) => {
 const sendFriendRequest = async (req, res) => {
     try {
         const requesterId = req.user.id;
-        const targetUserId = Number(req.body.user_id);
+        const targetUserId = Number(req.body?.user_id);
 
         if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
             return res.status(400).json({ message: 'user_id debe ser un entero positivo' });

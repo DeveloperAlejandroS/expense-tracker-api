@@ -271,7 +271,7 @@ const addContribution = async (req, res) => {
     try {
         const userId = req.user.id;
         const itemId = Number(req.params.id);
-        const amount = Number(req.body.amount);
+        const amount = Number(req.body?.amount);
 
         if (!Number.isInteger(itemId) || itemId <= 0) {
             return res.status(400).json({ message: 'id debe ser un entero positivo' });
