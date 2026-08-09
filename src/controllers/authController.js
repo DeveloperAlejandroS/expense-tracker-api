@@ -3,6 +3,8 @@ const jwt = require('jsonwebtoken');
 const db = require('../db/connection');
 
 const JWT_EXPIRES_IN = '7d';
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD_LENGTH = 8;
 
 const buildUserSelect = `
     id,
@@ -38,6 +40,14 @@ const register = async (req, res) => {
         }
 
         const normalizedEmail = String(email).trim().toLowerCase();
+
+        if (!EMAIL_REGEX.test(normalizedEmail)) {
+            return res.status(400).json({ message: 'El email no tiene un formato válido' });
+        }
+
+        if (String(password).length < MIN_PASSWORD_LENGTH) {
+            return res.status(400).json({ message: `La password debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres` });
+        }
         const normalizedUsername = username ? String(username).trim() : null;
         const normalizedPhone = phone ? String(phone).trim() : null;
 
