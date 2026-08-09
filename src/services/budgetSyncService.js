@@ -89,6 +89,7 @@ const computeMonthTotals = async (client, budgetMonth) => {
             split_expense_id: row.sync_expense_id,
             split_role: row.sync_role,
             is_pending: row.is_pending,
+            libreta_entry_id: row.libreta_entry_id,
             position: row.position,
         };
         const bucket = sections[item.section];

@@ -183,6 +183,9 @@ const loadOwnedItem = async (client, itemId, userId) => {
     if (syncResult.rows.length > 0) {
         return { error: { status: 400, message: 'Este ítem está sincronizado con Split.it y no se puede editar directamente' } };
     }
+    if (item.libreta_entry_id) {
+        return { error: { status: 400, message: 'Este ítem viene de un abono de la Libreta y no se puede editar directamente' } };
+    }
 
     return { item };
 };
