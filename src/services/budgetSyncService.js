@@ -184,14 +184,22 @@ const recomputeForwardChainForMonth = async (client, budgetMonthId) => {
 };
 
 // Se llama al crear (o re-crear en un edit) un gasto compartido:
-// - El pagador recibe un ítem CONFIRMADO por el monto completo (esa plata
-//   salió de su bolsillo de verdad, ya).
+// - El pagador recibe un ítem CONFIRMADO por SU PROPIA parte (shares.get
+//   (paid_by)), no por el monto total — lo que otros le deben no es un
+//   gasto suyo, es plata que va a recuperar. Antes esto se creaba por el
+//   monto completo, lo que inflaba "Gastos" incluso cuando la parte del
+//   pagador era $0 (ej. le prestaste/vendiste algo a alguien y te debe
+//   el 100%): no gastaste nada, pero igual aparecía como si lo hubieras
+//   hecho.
 // - Cada otro participante recibe un ítem PENDIENTE por su parte, en su
 //   propio mes actual — visible como obligación, pero no cuenta en su
 //   Balance hasta que la pague de verdad y se confirme.
+// - Lo que te devuelvan después (ver onParticipantSettled) entra como
+//   Ingreso en el mes en que de verdad lo recibís, no como una resta a
+//   este ítem.
 const onExpenseCreated = async (client, expense, shares) => {
     const payerMonth = await getOrCreateBudgetMonth(client, expense.paid_by, expense.created_at);
-    const fullAmount = Number(expense.amount);
+    const payerOwnShare = shares?.get(expense.paid_by) ?? Number(expense.amount);
 
     const payerItemResult = await client.query(
         `
@@ -199,7 +207,7 @@ const onExpenseCreated = async (client, expense, shares) => {
         VALUES ($1, 'tracked_expense', $2, $3, $3, false)
         RETURNING id
         `,
-        [payerMonth.id, expense.description, fullAmount]
+        [payerMonth.id, expense.description, Number(payerOwnShare)]
     );
 
     await client.query(
@@ -269,27 +277,61 @@ const onExpenseDeleted = async (client, expenseId) => {
 
 // Se llama con cada abono (parcial o total) que un participante paga de
 // verdad — `incrementAmount` es lo que se acaba de pagar en esta pasada, no
-// el total de la deuda. Le devuelve esa plata al pagador (reduce su ítem
-// confirmado) y, solo si con este abono la deuda queda 100% saldada,
+// el total de la deuda. Al pagador esa plata le entra como INGRESO (un
+// "Reembolso: <descripción>") en su mes actual — no como una resta a su
+// ítem de Gastos, que ya solo representa su propia parte y no debería
+// moverse por esto. Y, solo si con este abono la deuda queda 100% saldada,
 // confirma el ítem pendiente del deudor (is_pending → false). Mientras
 // quede algo por pagar, el ítem del deudor se mantiene pendiente tal cual.
 const onParticipantSettled = async (client, expenseId, debtorUserId, incrementAmount, isFullyPaid) => {
     const payerSyncResult = await client.query(
         `
-        SELECT bi.id AS budget_item_id, bi.budget_month_id
+        SELECT bs.user_id AS payer_user_id, e.description
         FROM budget_split_sync bs
-        INNER JOIN budget_items bi ON bi.id = bs.budget_item_id
+        INNER JOIN expenses e ON e.id = bs.expense_id
         WHERE bs.expense_id = $1 AND bs.role = 'payer'
         `,
         [expenseId]
     );
     if (payerSyncResult.rows.length > 0) {
-        const { budget_item_id: payerItemId, budget_month_id: payerMonthId } = payerSyncResult.rows[0];
-        await client.query(
-            'UPDATE budget_items SET actual_amount = actual_amount - $1, updated_at = now() WHERE id = $2',
-            [incrementAmount, payerItemId]
+        const { payer_user_id: payerUserId, description } = payerSyncResult.rows[0];
+        const payerMonth = await getOrCreateBudgetMonth(client, payerUserId, currentMonthDate());
+
+        // Puede haber varios abonos del mismo gasto cayendo en meses
+        // distintos — buscamos si ya existe el ítem de reembolso PARA ESTE
+        // MES puntual antes de crear uno nuevo, para no duplicar filas.
+        const existingIncomeResult = await client.query(
+            `
+            SELECT bi.id AS budget_item_id
+            FROM budget_split_sync bs
+            INNER JOIN budget_items bi ON bi.id = bs.budget_item_id
+            WHERE bs.expense_id = $1 AND bs.user_id = $2 AND bs.role = 'payer_income'
+              AND bi.budget_month_id = $3
+            `,
+            [expenseId, payerUserId, payerMonth.id]
         );
-        await recomputeForwardChainForMonth(client, payerMonthId);
+
+        if (existingIncomeResult.rows.length > 0) {
+            await client.query(
+                'UPDATE budget_items SET budgeted_amount = budgeted_amount + $1, actual_amount = actual_amount + $1, updated_at = now() WHERE id = $2',
+                [incrementAmount, existingIncomeResult.rows[0].budget_item_id]
+            );
+        } else {
+            const createdIncome = await client.query(
+                `
+                INSERT INTO budget_items (budget_month_id, section, label, budgeted_amount, actual_amount, is_pending)
+                VALUES ($1, 'income', $2, $3, $3, false)
+                RETURNING id
+                `,
+                [payerMonth.id, `Reembolso: ${description}`, incrementAmount]
+            );
+            await client.query(
+                `INSERT INTO budget_split_sync (budget_item_id, expense_id, user_id, role) VALUES ($1, $2, $3, 'payer_income')`,
+                [createdIncome.rows[0].id, expenseId, payerUserId]
+            );
+        }
+
+        await recomputeForwardChainForMonth(client, payerMonth.id);
     }
 
     if (!isFullyPaid) return;

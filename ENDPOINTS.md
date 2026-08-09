@@ -699,10 +699,10 @@ Borra un ítem manual (y su espejo de ahorro si tenía uno). Misma restricción 
 ### Sincronización automática con Split.it
 No son endpoints propios — se generan solos al usar `/expenses`:
 
-- Al crear un gasto compartido, el pagador recibe un ítem `tracked_expense` **confirmado** (`is_pending: false`) por el monto completo, en su propio mes — esa plata salió de su bolsillo de verdad. `split_role: "payer"`.
+- Al crear un gasto compartido, el pagador recibe un ítem `tracked_expense` **confirmado** (`is_pending: false`) por **su propia parte** (`shares.get(paid_by)`, no el monto total), en su propio mes — lo que le corresponde a otros no es un gasto suyo, es plata que va a recuperar. `split_role: "payer"`. (Antes esto se creaba por el monto completo, lo que inflaba "Gastos" incluso cuando la parte del pagador era $0 — por ejemplo, si le prestás/vendés algo a alguien y te debe el 100%, vos no gastaste nada.)
 - Cada otro participante recibe, en ese mismo momento y en **su propio mes actual**, un ítem `tracked_expense` **pendiente** (`is_pending: true`) por su parte — visible como obligación, pero fuera de sus totales hasta que la pague. `split_role: "participant"`.
-- Cada abono confirmado (`mark-paid`/`confirm`, ver 5.1) baja el ítem del pagador en ese monto exacto. Recién cuando el participante terminó de pagar el 100% de su parte, su ítem pasa a `is_pending: false` y empieza a contar en su balance.
-- Editar o borrar el gasto compartido recalcula/elimina estos ítems (payer + todos los participantes).
+- Cada abono confirmado (`mark-paid`/`confirm`, ver 5.1) genera o incrementa, en el mes actual del **pagador**, un ítem `income` **"Reembolso: `<descripción>`"** por ese monto exacto — la devolución entra como Ingreso real, no como una resta al ítem de Gastos del pagador (que ya no se toca después de creado). `split_role: "payer_income"`. Puede haber varios de estos por el mismo gasto si los abonos caen en meses distintos. Recién cuando el participante terminó de pagar el 100% de su parte, su propio ítem pasa a `is_pending: false` y empieza a contar en su balance.
+- Editar o borrar el gasto compartido recalcula/elimina todos estos ítems (payer, participantes y cualquier reembolso ya recibido).
 
 ## 6) Errores comunes
 
