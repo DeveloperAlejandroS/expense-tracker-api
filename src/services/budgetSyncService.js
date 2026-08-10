@@ -257,22 +257,28 @@ const onExpenseCreated = async (client, expense, shares) => {
     }
 };
 
-// Borra todo lo sincronizado de un gasto (payer + cualquier participante que
-// ya haya generado su propio ítem) — usado antes de re-crear en un edit, o
-// directamente al borrar el gasto.
+// Borra lo sincronizado de un gasto que ya no corresponde (payer +
+// participantes) — usado antes de re-crear en un edit, o directamente al
+// borrar el gasto. A propósito NO toca los ítems 'payer_income': esos son
+// reembolsos que YA cobraste de verdad, y editar o borrar el gasto que los
+// originó no debería hacer que esa plata desaparezca de tu presupuesto.
 const clearExpenseSync = async (client, expenseId) => {
     const affectedMonths = await client.query(
         `
         SELECT DISTINCT bi.budget_month_id
         FROM budget_items bi
         INNER JOIN budget_split_sync bs ON bs.budget_item_id = bi.id
-        WHERE bs.expense_id = $1
+        WHERE bs.expense_id = $1 AND bs.role IN ('payer', 'participant')
         `,
         [expenseId]
     );
 
     await client.query(
-        `DELETE FROM budget_items WHERE id IN (SELECT budget_item_id FROM budget_split_sync WHERE expense_id = $1)`,
+        `
+        DELETE FROM budget_items WHERE id IN (
+            SELECT budget_item_id FROM budget_split_sync WHERE expense_id = $1 AND role IN ('payer', 'participant')
+        )
+        `,
         [expenseId]
     );
 
@@ -288,6 +294,23 @@ const onExpenseUpdated = async (client, expenseId, expense, shares) => {
 
 const onExpenseDeleted = async (client, expenseId) => {
     await clearExpenseSync(client, expenseId);
+};
+
+// Se llama cuando se edita SOLO la descripción de un gasto (el monto y los
+// participantes quedan exactamente igual) — no hace falta resetear nada de
+// lo ya pagado, pero sí conviene que las etiquetas de los ítems ya
+// sincronizados (el gasto del pagador, el de cada participante, y
+// cualquier reembolso ya cobrado) reflejen el texto nuevo.
+const relabelExpenseSync = async (client, expenseId, newDescription) => {
+    const syncedResult = await client.query(
+        `SELECT budget_item_id, role FROM budget_split_sync WHERE expense_id = $1`,
+        [expenseId]
+    );
+
+    for (const row of syncedResult.rows) {
+        const label = row.role === 'payer_income' ? `Reembolso: ${newDescription}` : newDescription;
+        await client.query('UPDATE budget_items SET label = $1, updated_at = now() WHERE id = $2', [label, row.budget_item_id]);
+    }
 };
 
 // Se llama con cada abono (parcial o total) que un participante paga de
@@ -386,4 +409,5 @@ module.exports = {
     onExpenseUpdated,
     onExpenseDeleted,
     onParticipantSettled,
+    relabelExpenseSync,
 };
