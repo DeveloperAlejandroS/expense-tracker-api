@@ -495,7 +495,9 @@ Edita un gasto existente. Solo puede ejecutarlo quien lo creó (`paid_by`).
 
 Body: igual forma que `POST /expenses` (`amount`, `description`, `split_type`, `participants`).
 
-**Importante:** editar un gasto **reinicia el estado de pago de todos los participantes** (vuelven a `pending`, excepto el pagador que sigue `paid`), sin importar si ya había pagos confirmados. El frontend debe avisar esto al usuario antes de confirmar la edición.
+**Importante:** si el `amount` o los `participants` cambian de verdad respecto a lo que ya había, editar un gasto **reinicia el estado de pago de todos los participantes** (vuelven a `pending`, excepto el pagador que sigue `paid`) — el monto de la deuda cambió, así que el progreso de pago anterior ya no significa lo mismo. El frontend debe avisar esto al usuario antes de confirmar ese tipo de edición.
+
+Si en cambio **solo cambia la descripción** (mismo `amount`, mismos `participants`), no se resetea nada — ni el progreso de pago ni los reembolsos que ya se hayan cobrado — y la respuesta trae `"message": "Gasto actualizado correctamente."` sin la advertencia de reinicio. En ambos casos, cualquier ítem `income` de tipo `"Reembolso: ..."` que ya se haya generado por un abono confirmado **se conserva siempre**, incluso si el monto/participantes cambian o el gasto se borra — esa plata ya entró de verdad a tu bolsillo y no debería desaparecer del presupuesto solo porque el registro del gasto que la originó cambió o dejó de existir. Si el gasto se borra, esos ítems quedan como ingresos normales (`is_split_synced: false`), ya sin el vínculo al gasto que no existe más.
 
 Respuesta `200`: misma forma que la respuesta de `POST /expenses`, con el mensaje `"Gasto actualizado correctamente. Los estados de pago se reiniciaron."`.
 
@@ -681,7 +683,7 @@ Es también la forma correcta de registrar una **deuda nueva** (no un pago a una
 Crea un ítem manual. Body: `{ section, label, budgeted_amount, actual_amount, link_to_saving_item_id }`.
 
 - `section`: uno de `income`, `fixed_expense`, `tracked_expense`, `saving`, `debt`.
-- `link_to_saving_item_id` (opcional, solo válido en `fixed_expense`/`tracked_expense`): id de un ítem **que ya exista** en la sección `saving`, del mismo mes. Si se manda, el `actual_amount` de este ítem se **suma** (no reemplaza) al ítem de ahorro elegido — nunca se crea un ahorro nuevo en automático. Si el id no existe, no es tuyo, no está en `saving`, o no es del mismo mes, responde `400`. `is_savings_link` en la respuesta queda como `true`/`false` según si quedó vinculado, pero ya no se manda como input.
+- `link_to_saving_item_id` (opcional, solo válido en `fixed_expense`/`tracked_expense`): id de un ítem **que ya exista** en la sección `saving`, del mismo mes. Si se manda, el `actual_amount` de este ítem se **suma** (no reemplaza) al ítem de ahorro elegido — nunca se crea un ahorro nuevo en automático. Si el id no existe, no es tuyo, no está en `saving`, o no es del mismo mes, responde `400`. `is_savings_link` en la respuesta queda como `true`/`false` según si quedó vinculado, pero ya no se manda como input. El ahorro destino nunca queda en negativo: si se desvincula/borra el gasto que lo alimentaba después de que alguien editó el ahorro a mano, el monto se pisa en 0 en vez de pasar a negativo.
 
 ### PATCH /budget/items/:id
 Edita un ítem manual. Mismo `link_to_saving_item_id` que en el create — mandarlo `null` desvincula el ítem (revierte el aporte que le había hecho al ahorro). Cambiar de un ahorro a otro revierte el aporte del viejo destino y lo aplica al nuevo; cambiar el `actual_amount` de un ítem ya vinculado aplica solo la diferencia al ahorro, no lo pisa.

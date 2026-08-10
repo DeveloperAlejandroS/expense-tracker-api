@@ -225,7 +225,7 @@ const updateExpense = async (req, res) => {
             return res.status(400).json({ message: 'id debe ser un entero positivo' });
         }
 
-        const expenseResult = await client.query('SELECT id, paid_by FROM expenses WHERE id = $1', [expenseId]);
+        const expenseResult = await client.query('SELECT id, paid_by, amount, description FROM expenses WHERE id = $1', [expenseId]);
         const expense = expenseResult.rows[0];
 
         if (!expense) {
@@ -242,28 +242,64 @@ const updateExpense = async (req, res) => {
             return res.status(status).json(body);
         }
 
+        // Si el monto y la forma de repartirlo no cambian de verdad, no hace
+        // falta resetear nada: ni el progreso de pago de los participantes
+        // ni los reembolsos que ya cobraste. Solo así evitamos que editar la
+        // descripción para corregir una falta de ortografía te borre plata
+        // que ya entró de verdad a tu presupuesto.
+        const currentParticipantsResult = await client.query(
+            'SELECT user_id, amount_owed FROM expense_participants WHERE expense_id = $1',
+            [expenseId]
+        );
+        const currentShares = new Map(currentParticipantsResult.rows.map((r) => [r.user_id, Number(r.amount_owed)]));
+        const amountUnchanged = Math.abs(Number(expense.amount) - resolved.amountValue) < 0.01;
+        const sharesUnchanged =
+            currentShares.size === resolved.shares.size &&
+            [...resolved.shares.entries()].every(([uid, amt]) => Math.abs((currentShares.get(uid) ?? NaN) - amt) < 0.01);
+        const isStructuralNoOp = amountUnchanged && sharesUnchanged;
+        const descriptionChanged = expense.description !== resolved.description;
+
         await client.query('BEGIN');
         transactionStarted = true;
 
-        await client.query('DELETE FROM expense_participants WHERE expense_id = $1', [expenseId]);
-        await insertParticipants(client, expenseId, userId, resolved.shares);
+        let updatedExpenseResult;
 
-        const updatedExpenseResult = await client.query(
-            `
-            UPDATE expenses
-            SET amount = $1, description = $2, updated_at = now()
-            WHERE id = $3
-            RETURNING id, amount, description, paid_by, created_at, updated_at
-            `,
-            [resolved.amountValue, resolved.description, expenseId]
-        );
+        if (isStructuralNoOp) {
+            updatedExpenseResult = await client.query(
+                `
+                UPDATE expenses
+                SET description = $1, updated_at = now()
+                WHERE id = $2
+                RETURNING id, amount, description, paid_by, created_at, updated_at
+                `,
+                [resolved.description, expenseId]
+            );
+            if (descriptionChanged) {
+                await budgetSyncService.relabelExpenseSync(client, expenseId, resolved.description);
+            }
+        } else {
+            await client.query('DELETE FROM expense_participants WHERE expense_id = $1', [expenseId]);
+            await insertParticipants(client, expenseId, userId, resolved.shares);
 
-        await budgetSyncService.onExpenseUpdated(client, expenseId, updatedExpenseResult.rows[0], resolved.shares);
+            updatedExpenseResult = await client.query(
+                `
+                UPDATE expenses
+                SET amount = $1, description = $2, updated_at = now()
+                WHERE id = $3
+                RETURNING id, amount, description, paid_by, created_at, updated_at
+                `,
+                [resolved.amountValue, resolved.description, expenseId]
+            );
+
+            await budgetSyncService.onExpenseUpdated(client, expenseId, updatedExpenseResult.rows[0], resolved.shares);
+        }
 
         await client.query('COMMIT');
 
         return res.status(200).json({
-            message: 'Gasto actualizado correctamente. Los estados de pago se reiniciaron.',
+            message: isStructuralNoOp
+                ? 'Gasto actualizado correctamente.'
+                : 'Gasto actualizado correctamente. El estado de pago de los participantes se reinició porque el monto o los participantes cambiaron.',
             expense: updatedExpenseResult.rows[0],
             split: {
                 split_type: resolved.splitType,

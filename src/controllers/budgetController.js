@@ -50,10 +50,21 @@ const getMonth = async (req, res) => {
 // sobreescribiendo su monto total: el mismo ahorro puede recibir dinero de
 // más de un gasto vinculado, o de abonos manuales, y todos tienen que
 // sumarse entre sí en vez de pisarse.
+// GREATEST(..., 0): un ahorro nunca puede quedar en negativo. Si alguien
+// edita el ahorro a mano después de vincularlo, y después se borra o
+// desvincula el gasto que lo alimentaba, sin este piso el ahorro podía
+// terminar con un monto negativo — algo que no tiene sentido para un
+// ahorro (no existe "menos que nada" ahorrado).
 const applySavingsDelta = async (client, targetItemId, delta) => {
     if (!targetItemId || delta === 0) return;
     await client.query(
-        'UPDATE budget_items SET budgeted_amount = budgeted_amount + $1, actual_amount = actual_amount + $1, updated_at = now() WHERE id = $2',
+        `
+        UPDATE budget_items
+        SET budgeted_amount = GREATEST(budgeted_amount + $1, 0),
+            actual_amount = GREATEST(actual_amount + $1, 0),
+            updated_at = now()
+        WHERE id = $2
+        `,
         [delta, targetItemId]
     );
 };
