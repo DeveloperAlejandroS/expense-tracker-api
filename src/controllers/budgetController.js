@@ -197,6 +197,9 @@ const loadOwnedItem = async (client, itemId, userId) => {
     if (item.libreta_entry_id) {
         return { error: { status: 400, message: 'Este ítem viene de un abono de la Libreta y no se puede editar directamente' } };
     }
+    if (item.debt_entry_id) {
+        return { error: { status: 400, message: 'Este ítem viene de un pago a una deuda y no se puede editar directamente' } };
+    }
 
     return { item };
 };
@@ -392,7 +395,7 @@ const updateOpening = async (req, res) => {
             return res.status(400).json({ message: 'El mes debe tener formato YYYY-MM' });
         }
         if (cashBalance === undefined && savingsBalance === undefined && debtBalance === undefined) {
-            return res.status(400).json({ message: 'Enviá al menos un saldo para actualizar' });
+            return res.status(400).json({ message: 'Envía al menos un saldo para actualizar' });
         }
 
         const budgetMonth = await getOrCreateBudgetMonth(client, userId, monthDate);
@@ -407,6 +410,22 @@ const updateOpening = async (req, res) => {
 
         await client.query('BEGIN');
         transactionStarted = true;
+
+        // Bitácora: un renglón por cada saldo que de verdad cambió, con el
+        // valor viejo y el nuevo — así queda registro de quién corrigió qué
+        // y cuándo, en vez de que el número simplemente cambie sin rastro.
+        const changes = [
+            ['cash_balance', Number(budgetMonth.opening_cash_balance), nextCash],
+            ['savings_balance', Number(budgetMonth.opening_savings_balance), nextSavings],
+            ['debt_balance', Number(budgetMonth.opening_debt_balance), nextDebt],
+        ].filter(([, oldValue, newValue]) => Math.abs(oldValue - newValue) > 0.001);
+
+        for (const [field, oldValue, newValue] of changes) {
+            await client.query(
+                'INSERT INTO budget_opening_history (budget_month_id, field, old_value, new_value) VALUES ($1, $2, $3, $4)',
+                [budgetMonth.id, field, oldValue, newValue]
+            );
+        }
 
         const updated = await client.query(
             `
@@ -439,8 +458,45 @@ const updateOpening = async (req, res) => {
     }
 };
 
+// Historial de correcciones a los saldos iniciales de un mes -- para poder
+// responder "¿por qué cambió mi saldo de marzo?" en vez de que el número
+// simplemente sea distinto sin explicación.
+const getOpeningHistory = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const monthDate = parseMonthParam(req.params.month);
+
+        if (!monthDate) {
+            return res.status(400).json({ message: 'El mes debe tener formato YYYY-MM' });
+        }
+
+        const monthResult = await db.query('SELECT id FROM budget_months WHERE user_id = $1 AND month = $2', [userId, monthDate]);
+        if (monthResult.rows.length === 0) {
+            return res.status(200).json({ history: [] });
+        }
+
+        const historyResult = await db.query(
+            'SELECT field, old_value, new_value, changed_at FROM budget_opening_history WHERE budget_month_id = $1 ORDER BY changed_at DESC',
+            [monthResult.rows[0].id]
+        );
+
+        return res.status(200).json({
+            history: historyResult.rows.map((row) => ({
+                field: row.field,
+                old_value: Number(row.old_value),
+                new_value: Number(row.new_value),
+                changed_at: row.changed_at,
+            })),
+        });
+    } catch (error) {
+        console.error('Error en getOpeningHistory:', error);
+        return res.status(500).json({ message: 'Error interno del servidor' });
+    }
+};
+
 module.exports = {
     getMonth,
+    getOpeningHistory,
     createItem,
     updateItem,
     addContribution,

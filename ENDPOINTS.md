@@ -679,6 +679,20 @@ Es también la forma correcta de registrar una **deuda nueva** (no un pago a una
 
 **Recálculo hacia adelante:** si ya existen meses posteriores para este usuario (por haberlos abierto antes), sus `opening_*` se recalculan en cascada automáticamente para que el saldo siga fluyendo de un mes al otro — corregir agosto también corrige lo que septiembre había heredado mal. Esto mismo pasa automáticamente después de crear/editar/borrar un ítem o registrar un abono (`recomputeForwardChainForMonth` en `budgetSyncService.js`), no solo al tocar `opening` directo.
 
+### GET /budget/:month/opening/history
+Bitácora de correcciones a los saldos iniciales de ese mes — quién no queda registrado (no hay multiusuario por mes), pero sí **cuándo** y **entre qué valores** cambió cada saldo, para poder responder "¿por qué mi saldo de marzo es distinto?" en vez de que el número simplemente sea otro sin explicación. Incluye tanto correcciones manuales (`PATCH .../opening`) como ajustes automáticos por crear/editar/borrar una deuda (ver 5.4).
+
+Respuesta `200`:
+```json
+{
+  "history": [
+    { "field": "debt_balance", "old_value": 500000, "new_value": 600000, "changed_at": "2026-08-10T02:38:29.180Z" },
+    { "field": "cash_balance", "old_value": 0, "new_value": 200000, "changed_at": "2026-08-10T02:37:23.368Z" }
+  ]
+}
+```
+Orden: más reciente primero. Si el mes todavía no existe o nunca se corrigió nada, `history` viene vacío.
+
 ### POST /budget/:month/items
 Crea un ítem manual. Body: `{ section, label, budgeted_amount, actual_amount, link_to_saving_item_id }`.
 
@@ -746,6 +760,41 @@ Efecto:
 2. Crea un ítem `income` **nuevo** (no acumula sobre uno existente) en tu mes actual, con label `"Abono: <debtor_name>"` (o `"Abono: <debtor_name> — <description>"` si hay descripción), marcado con `libreta_entry_id` — no se puede editar directo desde `PATCH /budget/items/:id` (mismo tipo de restricción que los ítems sincronizados con Split.it).
 
 Respuesta `200`: `{ "message": "Abono registrado", "entry": { ...deuda actualizada... }, "income_item": { ...ítem creado... } }`.
+
+## 5.4) Deudas (`/debts`)
+
+Espejo exacto de Libreta, pero en la dirección contraria: acá se itemiza lo que **tú** debés a otros (antes solo existía como el número agregado `opening_debt_balance`, sin detalle de a quién le debés ni cuánto). Todas estas rutas están protegidas con JWT.
+
+A diferencia de Libreta (que nunca toca el presupuesto al crearse), acá **sí**: crear/editar/borrar una deuda ajusta `opening_debt_balance` del mes actual en el mismo momento, para que el agregado que ya usa la fórmula de Flujo de Caja (`debt_balance = saldo inicial − pagos del mes`) se mantenga consistente con el detalle. Cada ajuste automático queda registrado en la bitácora de saldos iniciales (ver 5.2), igual que uno manual.
+
+### GET /debts
+Lista todas las deudas del usuario autenticado, más el total pendiente.
+
+Respuesta `200`:
+```json
+{
+  "entries": [
+    { "id": 1, "creditor_name": "Banco XYZ", "description": "Préstamo moto", "amount_owed": 500000, "amount_paid": 150000, "remaining": 350000, "status": "partial", "created_at": "...", "updated_at": "..." }
+  ],
+  "total_pending": 350000
+}
+```
+
+### POST /debts
+Registra una deuda nueva. Body: `{ creditor_name, description, amount_owed }` (`description` opcional). Suma `amount_owed` a `opening_debt_balance` del mes actual.
+
+### PATCH /debts/:id
+Edita `creditor_name`, `description` y/o `amount_owed`. Si `amount_owed` cambia, ajusta `opening_debt_balance` por la diferencia. Responde `400` si el nuevo `amount_owed` queda por debajo de lo que ya pagaste.
+
+### DELETE /debts/:id
+Borra la deuda y resta su saldo pendiente (`remaining`) de `opening_debt_balance`. Los ítems de la sección `debt` que ya se generaron por pagos anteriores **no se borran** — esos pagos ya salieron de verdad de tu bolsillo.
+
+### PATCH /debts/:id/contribute
+Registra un pago (parcial o total). Body opcional: `{ "amount": 150000 }` — si se omite, usa el saldo pendiente completo. Responde `400` si `amount` supera lo que falta.
+
+Efecto: suma `amount` a `amount_paid` de la deuda, y crea un ítem **nuevo** en la sección `debt` del mes actual, con label `"Pago: <creditor_name>"` (o con `— <description>` si hay), marcado con `debt_entry_id` — no se puede editar directo desde `PATCH /budget/items/:id`.
+
+Respuesta `200`: `{ "message": "Pago registrado", "entry": { ...deuda actualizada... }, "debt_item": { ...ítem creado... } }`.
 
 ## 6) Errores comunes
 
