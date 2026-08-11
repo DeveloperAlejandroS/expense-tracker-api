@@ -92,6 +92,8 @@ const computeMonthTotals = async (client, budgetMonth) => {
             libreta_entry_id: row.libreta_entry_id,
             debt_entry_id: row.debt_entry_id,
             position: row.position,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         };
         const bucket = sections[item.section];
         if (!bucket) continue;
