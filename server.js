@@ -14,8 +14,35 @@ const debtsRoutes = require('./src/routes/debtsRoutes');
 
 const app = express();
 
+// `cors()` sin opciones refleja cualquier origen. El JWT va en el header
+// Authorization (no en cookie), así que esto no abre un CSRF clásico -- pero
+// no hay razón para no restringirlo. `ALLOWED_ORIGINS` es una lista separada
+// por comas (ver .env.example); si no está seteada, se cae a permitir todo
+// (como antes) para no romper despliegues existentes que todavía no la
+// configuraron, pero deja un aviso en el log.
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+if (allowedOrigins.length === 0) {
+    console.warn('⚠️  ALLOWED_ORIGINS no está configurada -- CORS acepta cualquier origen. Configúrala en producción.');
+}
+
+const corsOptions = allowedOrigins.length > 0
+    ? {
+        origin: (origin, callback) => {
+            // Sin `origin` = same-origin, curl, apps móviles -- siempre se deja pasar.
+            if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+            const err = new Error('Origen no permitido por CORS');
+            err.isCorsRejection = true;
+            return callback(err);
+        },
+    }
+    : {};
+
 app.use(helmet());
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '100kb' }));
 
 app.get('/', (req, res) => {
@@ -36,6 +63,9 @@ app.use((req, res) => {
 
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
+    if (err.isCorsRejection) {
+        return res.status(403).json({ message: 'Origen no permitido' });
+    }
     console.error('Error no manejado:', err);
     res.status(500).json({ message: 'Error interno del servidor' });
 });

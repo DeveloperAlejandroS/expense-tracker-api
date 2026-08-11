@@ -148,13 +148,17 @@ const searchUsers = async (req, res) => {
             `
             SELECT
                 u.id,
-                u.email,
+                -- Email y teléfono son PII -- solo se devuelven si ya son
+                -- amigos aceptados. Antes se devolvían siempre, así que
+                -- cualquier usuario logueado podía buscar y ver el email y
+                -- teléfono real de un extraño.
+                CASE WHEN f.status = 'accepted' THEN u.email ELSE NULL END AS email,
                 u.username,
                 u.first_name,
                 u.middle_name,
                 u.last_name,
                 u.second_last_name,
-                u.phone,
+                CASE WHEN f.status = 'accepted' THEN u.phone ELSE NULL END AS phone,
                 u.is_active,
                 COALESCE(f.status, 'none') AS friendship_status,
                 COALESCE(f.status = 'accepted', false) AS is_friend_accepted
