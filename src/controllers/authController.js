@@ -6,6 +6,14 @@ const JWT_EXPIRES_IN = '7d';
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
 
+// Hash "señuelo" contra el que comparamos cuando el identificador no existe,
+// para que ese camino tarde lo mismo que el de password incorrecta (que sí
+// corre bcrypt.compare de verdad). Sin esto, "no existe" respondía
+// instantáneo y "existe pero password mal" tardaba lo que tarda bcrypt --
+// una diferencia de tiempo medible que permite enumerar qué identificadores
+// están registrados aunque el mensaje de error sea siempre el mismo.
+const DUMMY_HASH = bcrypt.hashSync('dummy-password-for-timing-safety', 10);
+
 const buildUserSelect = `
     id,
     email,
@@ -106,6 +114,18 @@ const register = async (req, res) => {
             user: newUser.rows[0]
         });
     } catch (error) {
+        // El chequeo de "¿ya existe?" de arriba es SELECT-antes-de-INSERT --
+        // si dos registros llegan a la vez con el mismo email/username/
+        // phone, el segundo puede pasar ese chequeo y solo fallar acá, en
+        // el UNIQUE constraint real de la DB. Sin este catch específico caía
+        // en el 500 genérico de abajo en vez de un 409 claro.
+        if (error.code === '23505') {
+            const field = error.constraint?.includes('email') ? 'email'
+                : error.constraint?.includes('username') ? 'username'
+                : error.constraint?.includes('phone') ? 'phone'
+                : 'dato';
+            return res.status(409).json({ message: `El ${field} ya está registrado` });
+        }
         console.error('Error en register:', error);
         return res.status(500).json({ message: 'Error interno del servidor' });
     }
@@ -147,6 +167,7 @@ const login = async (req, res) => {
         const user = result.rows[0];
 
         if (!user) {
+            await bcrypt.compare(password, DUMMY_HASH);
             return res.status(401).json({ message: 'Credenciales inválidas' });
         }
 
