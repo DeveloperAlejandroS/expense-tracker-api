@@ -1,4 +1,10 @@
+const bcrypt = require('bcrypt');
 const db = require('../db/connection');
+
+const MIN_PASSWORD_LENGTH = 8;
+// ~60 KB de data URL: de sobra para 256x256, y cabe en el límite de 100 KB del body.
+const MAX_AVATAR_LENGTH = 60000;
+const AVATAR_REGEX = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
 
 const userSelectFields = `
     id,
@@ -10,6 +16,7 @@ const userSelectFields = `
     second_last_name,
     birth_date,
     phone,
+    avatar_url,
     is_active,
     created_at,
     updated_at
@@ -61,6 +68,7 @@ const updateMe = async (req, res) => {
             second_last_name,
             birth_date,
             phone,
+            avatar_url,
         } = req.body;
 
         const fields = [];
@@ -106,6 +114,13 @@ const updateMe = async (req, res) => {
         pushField('birth_date', birth_date);
         pushField('phone', normalizedPhone);
 
+        if (avatar_url !== undefined && avatar_url !== null) {
+            if (typeof avatar_url !== 'string' || avatar_url.length > MAX_AVATAR_LENGTH || !AVATAR_REGEX.test(avatar_url)) {
+                return res.status(400).json({ message: 'La foto debe ser una imagen JPEG, PNG o WebP de menos de 60 KB' });
+            }
+        }
+        pushField('avatar_url', avatar_url);
+
         if (fields.length === 0) {
             return res.status(400).json({ message: 'No hay campos para actualizar' });
         }
@@ -128,6 +143,38 @@ const updateMe = async (req, res) => {
         });
     } catch (error) {
         console.error('Error en updateMe:', error);
+        return res.status(500).json({ message: 'Error interno del servidor' });
+    }
+};
+
+const changePassword = async (req, res) => {
+    try {
+        const { current_password, new_password } = req.body;
+
+        if (typeof current_password !== 'string' || typeof new_password !== 'string') {
+            return res.status(400).json({ message: 'Faltan la contraseña actual y la nueva' });
+        }
+        if (new_password.length < MIN_PASSWORD_LENGTH) {
+            return res.status(400).json({ message: `La contraseña nueva necesita al menos ${MIN_PASSWORD_LENGTH} caracteres` });
+        }
+
+        const result = await db.query('SELECT password FROM users WHERE id = $1', [req.user.id]);
+        const row = result.rows[0];
+        if (!row) {
+            return res.status(404).json({ message: 'Usuario no encontrado' });
+        }
+
+        const matches = await bcrypt.compare(current_password, row.password);
+        if (!matches) {
+            return res.status(401).json({ message: 'La contraseña actual no es correcta' });
+        }
+
+        const hash = await bcrypt.hash(new_password, 10);
+        await db.query('UPDATE users SET password = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [hash, req.user.id]);
+
+        return res.status(200).json({ message: 'Contraseña actualizada' });
+    } catch (error) {
+        console.error('Error en changePassword:', error);
         return res.status(500).json({ message: 'Error interno del servidor' });
     }
 };
@@ -204,5 +251,6 @@ const searchUsers = async (req, res) => {
 module.exports = {
     getMe,
     updateMe,
+    changePassword,
     searchUsers,
 };

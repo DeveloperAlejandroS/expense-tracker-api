@@ -887,3 +887,9 @@ Ejemplos adicionales:
 - Proyecto en JavaScript puro con CommonJS.
 - `JWT_SECRET` debe estar en `.env`.
 - `expense_participants` usa `status TEXT` (`pending` | `paid_pending_confirmation` | `paid`) en vez del antiguo `is_paid BOOLEAN`. Ver `migrations/001_expense_participant_status.sql`.
+
+## Perfil y ajustes
+
+- `PATCH /users/me` ahora acepta `avatar_url`: data URL `data:image/(jpeg|png|webp);base64,...` de hasta 60 KB, o `null` para quitarla. Se devuelve en `GET /users/me` y `GET /auth/me`.
+- `POST /users/me/password` — body `{ current_password, new_password }` (mín. 8). 401 si la actual no coincide. Límite: 10 intentos / 15 min.
+- Migración `009_user_avatar.sql` agrega `users.avatar_url`.
