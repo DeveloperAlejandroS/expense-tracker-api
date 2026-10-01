@@ -374,6 +374,9 @@ const getExpenses = async (req, res) => {
                 e.description,
                 e.paid_by,
                 payer.email AS paid_by_email,
+                payer.username AS paid_by_username,
+                payer.first_name AS paid_by_first_name,
+                payer.last_name AS paid_by_last_name,
                 e.created_at,
                 e.updated_at,
                 COALESCE(
@@ -381,6 +384,9 @@ const getExpenses = async (req, res) => {
                         DISTINCT jsonb_build_object(
                             'user_id', ep.user_id,
                             'email', participant_user.email,
+                            'username', participant_user.username,
+                            'first_name', participant_user.first_name,
+                            'last_name', participant_user.last_name,
                             'amount_owed', ep.amount_owed,
                             'amount_paid', ep.amount_paid,
                             'pending_claim_amount', ep.pending_claim_amount,
@@ -406,7 +412,7 @@ const getExpenses = async (req, res) => {
                     WHERE ep_visible.expense_id = e.id
                       AND ep_visible.user_id = $1
                )
-            GROUP BY e.id, payer.email
+            GROUP BY e.id, payer.email, payer.username, payer.first_name, payer.last_name
             ORDER BY e.created_at DESC
             `,
             [userId]
@@ -419,6 +425,9 @@ const getExpenses = async (req, res) => {
             paid_by: {
                 id: expense.paid_by,
                 email: expense.paid_by_email,
+                username: expense.paid_by_username,
+                first_name: expense.paid_by_first_name,
+                last_name: expense.paid_by_last_name,
             },
             paid_by_me: expense.paid_by === userId,
             my_share_amount: Number(expense.my_share_amount),
@@ -427,6 +436,9 @@ const getExpenses = async (req, res) => {
                 ? expense.participants.map((participant) => ({
                     user_id: participant.user_id,
                     email: participant.email,
+                    username: participant.username,
+                    first_name: participant.first_name,
+                    last_name: participant.last_name,
                     amount_owed: Number(participant.amount_owed),
                     amount_paid: Number(participant.amount_paid || 0),
                     pending_claim_amount: participant.pending_claim_amount !== null ? Number(participant.pending_claim_amount) : null,

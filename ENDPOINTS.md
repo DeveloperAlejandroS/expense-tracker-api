@@ -113,7 +113,7 @@ Respuesta `200`:
 ```
 
 ### GET /auth/me
-Valida el token y devuelve el payload decodificado.
+Valida el token y devuelve el **perfil real** del usuario desde la base de datos (nombre, teléfono, etc.), igual que `GET /users/me`. Antes devolvía solo los claims del JWT (`id`, `email`, `username`), por eso el frontend no podía saludar por nombre.
 
 Header requerido:
 - `Authorization: Bearer <JWT>`
@@ -121,16 +121,19 @@ Header requerido:
 Respuesta `200`:
 ```json
 {
-  "message": "Token válido",
   "user": {
     "id": 1,
     "email": "user1@test.com",
     "username": "user1",
-    "iat": 1713960000,
-    "exp": 1714564800
+    "first_name": "Ana",
+    "last_name": "Pérez",
+    "phone": null,
+    "is_active": true
   }
 }
 ```
+
+Token inválido o vencido: `401`.
 
 ## 3) Users
 
@@ -522,7 +525,10 @@ Respuesta `200`:
       "description": "Cena equipo",
       "paid_by": {
         "id": 1,
-        "email": "user1@test.com"
+        "email": "user1@test.com",
+        "username": "user1",
+        "first_name": "Ana",
+        "last_name": "Pérez"
       },
       "paid_by_me": true,
       "my_share_amount": 40000,
@@ -531,6 +537,9 @@ Respuesta `200`:
         {
           "user_id": 1,
           "email": "user1@test.com",
+          "username": "user1",
+          "first_name": "Ana",
+          "last_name": "Pérez",
           "amount_owed": 40000,
           "status": "paid",
           "paid_claimed_at": null,
