@@ -1,4 +1,5 @@
 const db = require('../db/connection');
+const push = require('../services/pushService');
 
 const canonicalPair = (userId1, userId2) => {
     const first = Math.min(userId1, userId2);
@@ -61,6 +62,13 @@ const sendFriendRequest = async (req, res) => {
             `,
             [userId1, userId2, requesterId]
         );
+
+        push.notifyLater(targetUserId, async () => ({
+            title: 'Solicitud de amistad',
+            body: `${await push.displayNameOf(requesterId)} quiere ser tu amigo en Split.it`,
+            url: '/#friends',
+            tag: 'friend-request',
+        }));
 
         return res.status(201).json({
             message: 'Solicitud de amistad enviada',
@@ -232,6 +240,13 @@ const acceptFriendship = async (req, res) => {
             `,
             [friendshipId]
         );
+
+        push.notifyLater(friendship.requested_by, async () => ({
+            title: 'Solicitud aceptada',
+            body: `${await push.displayNameOf(userId)} aceptó tu solicitud. Ya pueden dividir gastos.`,
+            url: '/#friends',
+            tag: 'friend-accepted',
+        }));
 
         return res.status(200).json({
             message: 'Solicitud aceptada',

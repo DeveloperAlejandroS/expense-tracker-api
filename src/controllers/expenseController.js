@@ -1,6 +1,7 @@
 const db = require('../db/connection');
 const { splitEqually, computePayerShareFromCustomSplit } = require('../utils/splitCalculator');
 const budgetSyncService = require('../services/budgetSyncService');
+const push = require('../services/pushService');
 
 const getExpenseContactSuggestions = async (req, res) => {
     try {
@@ -191,6 +192,16 @@ const createExpense = async (req, res) => {
         await budgetSyncService.onExpenseCreated(client, expense, resolved.shares);
 
         await client.query('COMMIT');
+
+        for (const [participantId, share] of resolved.shares) {
+            if (Number(participantId) === paidBy) continue;
+            push.notifyLater(Number(participantId), async () => ({
+                title: 'Nuevo gasto compartido',
+                body: `${await push.displayNameOf(paidBy)} agregó "${resolved.description}". Tu parte: ${push.formatMoney(share)}`,
+                url: '/#expenses',
+                tag: `expense-${expense.id}`,
+            }));
+        }
 
         return res.status(201).json({
             message: 'Gasto creado correctamente',
@@ -574,6 +585,20 @@ const claimExpenseDebt = async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({ message: 'No se encontró una deuda pendiente tuya en este gasto' });
         }
+
+        // Avisar a quien pagó el gasto: tiene que confirmar que recibió el dinero.
+        db.query('SELECT paid_by, description FROM expenses WHERE id = $1', [expenseId])
+            .then((r) => {
+                const exp = r.rows[0];
+                if (!exp) return;
+                push.notifyLater(exp.paid_by, async () => ({
+                    title: 'Te reportaron un pago',
+                    body: `${await push.displayNameOf(userId)} dice que te pagó ${push.formatMoney(claimAmount)} de "${exp.description}". Confírmalo.`,
+                    url: '/#expenses',
+                    tag: `claim-${expenseId}`,
+                }));
+            })
+            .catch((err) => console.error('Error preparando push de pago:', err.message));
 
         return res.status(200).json({
             message: 'Marcado como pagado, esperando confirmación del pagador',

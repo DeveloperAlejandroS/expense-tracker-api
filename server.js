@@ -11,6 +11,7 @@ const expenseRoutes = require('./src/routes/expenseRoutes');
 const budgetRoutes = require('./src/routes/budgetRoutes');
 const libretaRoutes = require('./src/routes/libretaRoutes');
 const debtsRoutes = require('./src/routes/debtsRoutes');
+const pushRoutes = require('./src/routes/pushRoutes');
 
 const app = express();
 
@@ -56,6 +57,7 @@ app.use('/expenses', expenseRoutes);
 app.use('/budget', budgetRoutes);
 app.use('/libreta', libretaRoutes);
 app.use('/debts', debtsRoutes);
+app.use('/push', pushRoutes);
 
 app.use((req, res) => {
     res.status(404).json({ message: 'Recurso no encontrado' });

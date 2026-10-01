@@ -893,3 +893,14 @@ Ejemplos adicionales:
 - `PATCH /users/me` ahora acepta `avatar_url`: data URL `data:image/(jpeg|png|webp);base64,...` de hasta 60 KB, o `null` para quitarla. Se devuelve en `GET /users/me` y `GET /auth/me`.
 - `POST /users/me/password` — body `{ current_password, new_password }` (mín. 8). 401 si la actual no coincide. Límite: 10 intentos / 15 min.
 - Migración `009_user_avatar.sql` agrega `users.avatar_url`.
+
+## Notificaciones push
+
+Requiere `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` y `VAPID_SUBJECT` en el entorno; sin ellas la API funciona pero no envía nada. Migración `010_push_subscriptions.sql`.
+
+- `GET /push/config` → `{ enabled, public_key }`
+- `POST /push/subscribe` — body: la suscripción del navegador (`{ endpoint, keys: { p256dh, auth } }`)
+- `POST /push/unsubscribe` — body `{ endpoint }`
+- `POST /push/test` — envía una notificación de prueba a los dispositivos del usuario
+
+Se envían al recibir una solicitud de amistad, cuando aceptan la tuya, cuando te incluyen en un gasto y cuando alguien reporta que te pagó.
