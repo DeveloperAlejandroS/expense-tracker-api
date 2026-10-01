@@ -904,3 +904,12 @@ Requiere `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` y `VAPID_SUBJECT` en el entorno
 - `POST /push/test` — envía una notificación de prueba a los dispositivos del usuario
 
 Se envían al recibir una solicitud de amistad, cuando aceptan la tuya, cuando te incluyen en un gasto y cuando alguien reporta que te pagó.
+
+## Tiempo real (WebSocket)
+
+`wss://<api>/ws`. Tras conectar, el cliente envía `{ "type": "auth", "token": "<JWT>" }` (10 s de plazo; token inválido cierra con código 4001) y recibe `{ "type": "ready" }`. Después el servidor solo envía avisos sin datos:
+
+- `{ "type": "expenses.changed" }` — a quien pagó y a los participantes, tras cualquier mutación exitosa en `/expenses`
+- `{ "type": "friends.changed" }` — a las dos personas de la relación, tras cualquier mutación exitosa en `/friends`
+
+El cliente responde recargando por la API normal. Las conexiones viven en memoria: válido mientras haya una sola instancia.

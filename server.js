@@ -12,6 +12,7 @@ const budgetRoutes = require('./src/routes/budgetRoutes');
 const libretaRoutes = require('./src/routes/libretaRoutes');
 const debtsRoutes = require('./src/routes/debtsRoutes');
 const pushRoutes = require('./src/routes/pushRoutes');
+const realtime = require('./src/services/realtimeService');
 
 const app = express();
 
@@ -52,8 +53,8 @@ app.get('/', (req, res) => {
 
 app.use('/auth', authRoutes);
 app.use('/users', usersRoutes);
-app.use('/friends', friendsRoutes);
-app.use('/expenses', expenseRoutes);
+app.use('/friends', realtime.friendSignals, friendsRoutes);
+app.use('/expenses', realtime.expenseSignals, expenseRoutes);
 app.use('/budget', budgetRoutes);
 app.use('/libreta', libretaRoutes);
 app.use('/debts', debtsRoutes);
@@ -83,7 +84,10 @@ const checkConnection = async () => {
     }
 };
 
-app.listen(PORT, async () => {
+const server = app.listen(PORT, async () => {
     console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
     await checkConnection();
 });
+
+// Tiempo real: WebSocket en /ws sobre el mismo servidor HTTP.
+realtime.attach(server);
