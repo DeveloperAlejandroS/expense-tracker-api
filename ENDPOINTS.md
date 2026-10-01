@@ -113,7 +113,7 @@ Respuesta `200`:
 ```
 
 ### GET /auth/me
-Valida el token y devuelve el payload decodificado.
+Valida el token y devuelve el **perfil real** del usuario desde la base de datos (nombre, teléfono, etc.), igual que `GET /users/me`. Antes devolvía solo los claims del JWT (`id`, `email`, `username`), por eso el frontend no podía saludar por nombre.
 
 Header requerido:
 - `Authorization: Bearer <JWT>`
@@ -121,16 +121,19 @@ Header requerido:
 Respuesta `200`:
 ```json
 {
-  "message": "Token válido",
   "user": {
     "id": 1,
     "email": "user1@test.com",
     "username": "user1",
-    "iat": 1713960000,
-    "exp": 1714564800
+    "first_name": "Ana",
+    "last_name": "Pérez",
+    "phone": null,
+    "is_active": true
   }
 }
 ```
+
+Token inválido o vencido: `401`.
 
 ## 3) Users
 
@@ -522,7 +525,10 @@ Respuesta `200`:
       "description": "Cena equipo",
       "paid_by": {
         "id": 1,
-        "email": "user1@test.com"
+        "email": "user1@test.com",
+        "username": "user1",
+        "first_name": "Ana",
+        "last_name": "Pérez"
       },
       "paid_by_me": true,
       "my_share_amount": 40000,
@@ -531,6 +537,9 @@ Respuesta `200`:
         {
           "user_id": 1,
           "email": "user1@test.com",
+          "username": "user1",
+          "first_name": "Ana",
+          "last_name": "Pérez",
           "amount_owed": 40000,
           "status": "paid",
           "paid_claimed_at": null,
@@ -878,3 +887,9 @@ Ejemplos adicionales:
 - Proyecto en JavaScript puro con CommonJS.
 - `JWT_SECRET` debe estar en `.env`.
 - `expense_participants` usa `status TEXT` (`pending` | `paid_pending_confirmation` | `paid`) en vez del antiguo `is_paid BOOLEAN`. Ver `migrations/001_expense_participant_status.sql`.
+
+## Perfil y ajustes
+
+- `PATCH /users/me` ahora acepta `avatar_url`: data URL `data:image/(jpeg|png|webp);base64,...` de hasta 60 KB, o `null` para quitarla. Se devuelve en `GET /users/me` y `GET /auth/me`.
+- `POST /users/me/password` — body `{ current_password, new_password }` (mín. 8). 401 si la actual no coincide. Límite: 10 intentos / 15 min.
+- Migración `009_user_avatar.sql` agrega `users.avatar_url`.

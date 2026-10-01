@@ -2,6 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { login, register } = require('../controllers/authController');
 const verifyToken = require('../middleware/verifyToken');
+const { getMe } = require('../controllers/usersController');
 
 const router = express.Router();
 
@@ -18,11 +19,8 @@ const authLimiter = rateLimit({
 
 router.post('/register', authLimiter, register);
 router.post('/login', authLimiter, login);
-router.get('/me', verifyToken, (req, res) => {
-	return res.status(200).json({
-		message: 'Token válido',
-		user: req.user,
-	});
-});
+// Devuelve el perfil real de la DB (nombre, etc.), no solo los claims del
+// JWT -- el front lo usa para saludar por nombre.
+router.get('/me', verifyToken, getMe);
 
 module.exports = router;
