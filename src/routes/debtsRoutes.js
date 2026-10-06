@@ -1,6 +1,6 @@
 const express = require('express');
 const verifyToken = require('../middleware/verifyToken');
-const { contributeToEntry, createEntry, deleteEntry, getEntries, updateEntry } = require('../controllers/debtsController');
+const { setInstallmentPaid, contributeToEntry, createEntry, deleteEntry, getEntries, updateEntry } = require('../controllers/debtsController');
 
 const router = express.Router();
 
@@ -11,5 +11,6 @@ router.post('/', createEntry);
 router.patch('/:id', updateEntry);
 router.delete('/:id', deleteEntry);
 router.patch('/:id/contribute', contributeToEntry);
+router.patch('/:id/installments/:number', setInstallmentPaid);
 
 module.exports = router;

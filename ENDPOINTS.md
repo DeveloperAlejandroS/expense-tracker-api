@@ -792,6 +792,13 @@ Respuesta `200`:
 ### POST /debts
 Registra una deuda nueva. Body: `{ creditor_name, description, amount_owed }` (`description` opcional). Suma `amount_owed` a `opening_debt_balance` del mes actual.
 
+Opcionales: `start_date` (`YYYY-MM-DD`, fecha en que se hizo la deuda; por defecto hoy) e `installments` (entero 2–120). Con `installments` la deuda se divide en cuotas mensuales iguales (la última absorbe el redondeo): la cuota 1 cae en el mes de `start_date`, la 2 en el siguiente, etc. Cada cuota crea un ítem **pendiente** (`is_pending = true`, `debt_installment_id`) en la sección `debt` de su mes — visible pero sin contar en el Balance. Las cuotas de meses ya pasados se muestran en el mes actual. La respuesta y `GET /debts` incluyen `start_date`, `installments_count` e `installments: [{ id, number, due_month: "YYYY-MM", amount, paid, paid_at }]`.
+
+En una deuda a cuotas: `PATCH /debts/:id` no puede cambiar `amount_owed` y `PATCH /debts/:id/contribute` responde `400` (se paga por cuotas). `DELETE` también quita los ítems de cuotas aún pendientes; los de cuotas ya pagadas se quedan.
+
+### PATCH /debts/:id/installments/:number
+Body: `{ "paid": true | false }`. Marcar **pagada**: el ítem de la cuota pasa al mes **actual** (base de caja), deja de ser pendiente (sale de caja y baja `debt_balance`) y suma a `amount_paid`. Deshacer: vuelve a ser pendiente en su mes. Es idempotente. Responde `200` con la deuda actualizada (`entry`), `404` si la deuda o la cuota no existen.
+
 ### PATCH /debts/:id
 Edita `creditor_name`, `description` y/o `amount_owed`. Si `amount_owed` cambia, ajusta `opening_debt_balance` por la diferencia. Responde `400` si el nuevo `amount_owed` queda por debajo de lo que ya pagaste.
 

@@ -91,6 +91,7 @@ const computeMonthTotals = async (client, budgetMonth) => {
             is_pending: row.is_pending,
             libreta_entry_id: row.libreta_entry_id,
             debt_entry_id: row.debt_entry_id,
+            debt_installment_id: row.debt_installment_id,
             position: row.position,
             created_at: row.created_at,
             updated_at: row.updated_at,
