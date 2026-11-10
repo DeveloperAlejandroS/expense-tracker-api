@@ -92,6 +92,7 @@ const computeMonthTotals = async (client, budgetMonth) => {
             libreta_entry_id: row.libreta_entry_id,
             debt_entry_id: row.debt_entry_id,
             debt_installment_id: row.debt_installment_id,
+            recurring_id: row.recurring_id,
             position: row.position,
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -147,6 +148,66 @@ const computeMonthTotals = async (client, budgetMonth) => {
             carry_forward_cash: carryForwardCash,
         },
     };
+};
+
+// Gastos que se repiten: al abrir un mes se crea (una sola vez) el ítem de cada
+// plantilla vigente, como gasto fijo planeado y sin pagar (actual = 0, así que
+// no mueve la caja hasta que se marca pagado). `recurring_runs` recuerda que ya
+// se creó: si borras el ítem de un mes, no reaparece. Todo en una sola
+// sentencia para que dos peticiones a la vez no lo dupliquen.
+const materializeRecurring = async (client, userId, budgetMonth) => {
+    await client.query(
+        `
+        WITH due AS (
+            SELECT r.*,
+                   ((date_part('year', $2::date) - date_part('year', r.start_month)) * 12
+                     + date_part('month', $2::date) - date_part('month', r.start_month))::int AS idx
+            FROM recurring_expenses r
+            WHERE r.user_id = $1 AND r.start_month <= $2::date
+        ),
+        ins AS (
+            INSERT INTO recurring_runs (recurring_id, budget_month_id)
+            SELECT id, $3 FROM due WHERE months_count IS NULL OR idx < months_count
+            ON CONFLICT DO NOTHING
+            RETURNING recurring_id
+        )
+        INSERT INTO budget_items (budget_month_id, section, label, budgeted_amount, actual_amount, recurring_id, position)
+        SELECT $3, 'fixed_expense',
+               CASE WHEN d.months_count IS NULL THEN d.label
+                    ELSE d.label || ' (cuota ' || (d.idx + 1) || '/' || d.months_count || ')' END,
+               CASE WHEN d.total_amount IS NOT NULL AND d.idx = d.months_count - 1
+                    THEN d.total_amount - d.amount * (d.months_count - 1) ELSE d.amount END,
+               0, d.id,
+               (SELECT COALESCE(MAX(position), -1) FROM budget_items WHERE budget_month_id = $3 AND section = 'fixed_expense')
+                 + row_number() OVER (ORDER BY d.id)
+        FROM due d INNER JOIN ins ON ins.recurring_id = d.id
+        `,
+        [userId, budgetMonth.month, budgetMonth.id]
+    );
+};
+
+// Ahorros con nombre, acumulados entre meses: un ahorro creado en agosto sigue
+// existiendo en octubre aunque ese mes no tenga ítem. La identidad es el nombre
+// (sin mayúsculas ni espacios de más): abonar en otro mes crea un ítem con el
+// mismo nombre y se suma aquí.
+// shortcut: identidad por nombre -- renombrar un ítem lo separa de su ahorro; pasar a una tabla de metas si eso molesta.
+const getSavingsFunds = async (client, userId, budgetMonth) => {
+    const result = await client.query(
+        `
+        SELECT (array_agg(bi.label ORDER BY bm.month DESC, bi.id DESC))[1] AS label,
+               SUM(bi.actual_amount) AS total,
+               SUM(CASE WHEN bm.id = $2 THEN bi.actual_amount ELSE 0 END) AS month_amount,
+               MAX(CASE WHEN bm.id = $2 THEN bi.id END) AS item_id
+        FROM budget_items bi
+        INNER JOIN budget_months bm ON bm.id = bi.budget_month_id
+        WHERE bm.user_id = $1 AND bm.month <= $3::date AND bi.section = 'saving' AND bi.is_pending = false
+        GROUP BY lower(btrim(bi.label))
+        HAVING SUM(bi.actual_amount) > 0 OR MAX(CASE WHEN bm.id = $2 THEN bi.id END) IS NOT NULL
+        ORDER BY 1
+        `,
+        [userId, budgetMonth.id, budgetMonth.month]
+    );
+    return result.rows.map((r) => ({ label: r.label, total: Number(r.total), month_amount: Number(r.month_amount), item_id: r.item_id }));
 };
 
 // Recalcula en cascada los `opening_*` de todos los meses de `userId` que ya
@@ -407,6 +468,8 @@ module.exports = {
     currentMonthDate,
     getOrCreateBudgetMonth,
     computeMonthTotals,
+    materializeRecurring,
+    getSavingsFunds,
     recomputeForwardChain,
     recomputeForwardChainForMonth,
     onExpenseCreated,

@@ -1,5 +1,6 @@
 const db = require('../db/connection');
 const { getOrCreateBudgetMonth, currentMonthDate, toMonthDate, recomputeForwardChainForMonth } = require('../services/budgetSyncService');
+const { isMoney } = require('../utils/money');
 
 // Espejo de libretaController.js, pero para lo que TÚ debes a otros. La
 // diferencia clave: acá SÍ se ajusta opening_debt_balance del mes actual al
@@ -143,7 +144,7 @@ const createEntry = async (req, res) => {
             return res.status(400).json({ message: 'creditor_name es requerido' });
         }
         const amount = Number(amountOwed);
-        if (!Number.isFinite(amount) || amount <= 0) {
+        if (!isMoney(amount) || amount <= 0) {
             return res.status(400).json({ message: 'amount_owed debe ser un número mayor a 0' });
         }
 
@@ -238,7 +239,7 @@ const updateEntry = async (req, res) => {
         if (!nextName) {
             return res.status(400).json({ message: 'creditor_name es requerido' });
         }
-        if (!Number.isFinite(nextAmountOwed) || nextAmountOwed <= 0) {
+        if (!isMoney(nextAmountOwed) || nextAmountOwed <= 0) {
             return res.status(400).json({ message: 'amount_owed debe ser un número mayor a 0' });
         }
         if (entry.installments_count && Math.abs(nextAmountOwed - Number(entry.amount_owed)) > 0.001) {
@@ -353,7 +354,7 @@ const contributeToEntry = async (req, res) => {
         const remaining = Number(entry.amount_owed) - Number(entry.amount_paid);
         const contributeAmount = req.body?.amount !== undefined ? amount : remaining;
 
-        if (!Number.isFinite(contributeAmount) || contributeAmount <= 0) {
+        if (!isMoney(contributeAmount) || contributeAmount <= 0) {
             return res.status(400).json({ message: 'amount debe ser un número mayor a 0' });
         }
         if (contributeAmount > remaining + 0.01) {
@@ -370,11 +371,18 @@ const contributeToEntry = async (req, res) => {
             `
             UPDATE debt_entries
             SET amount_paid = $1, status = $2, updated_at = now()
-            WHERE id = $3
+            WHERE id = $3 AND amount_paid = $4
             RETURNING *
             `,
-            [nextAmountPaid, isFullyPaid ? 'paid' : 'partial', entryId]
+            [nextAmountPaid, isFullyPaid ? 'paid' : 'partial', entryId, entry.amount_paid]
         );
+
+        // Dos abonos a la vez leyeron el mismo saldo: solo el primero se aplica.
+        if (updatedEntry.rows.length === 0) {
+            await client.query('ROLLBACK');
+            transactionStarted = false;
+            return res.status(409).json({ message: 'El saldo cambió mientras registrabas. Intenta de nuevo.' });
+        }
 
         const budgetMonth = await getOrCreateBudgetMonth(client, userId, currentMonthDate());
 

@@ -5,6 +5,18 @@ const push = require('../services/pushService');
 
 const router = express.Router();
 
+// El servidor hace peticiones a este endpoint: solo se aceptan los servicios
+// push de los navegadores, no cualquier URL que mande el cliente.
+const PUSH_HOSTS = /(^|\.)(googleapis\.com|push\.apple\.com|mozilla\.com|notify\.windows\.com)$/;
+const isPushEndpoint = (endpoint) => {
+    try {
+        const url = new URL(endpoint);
+        return url.protocol === 'https:' && PUSH_HOSTS.test(url.hostname);
+    } catch {
+        return false;
+    }
+};
+
 router.use(verifyToken);
 
 // La llave pública que el navegador necesita para suscribirse. `enabled`
@@ -16,7 +28,7 @@ router.get('/config', (req, res) => {
 router.post('/subscribe', async (req, res) => {
     try {
         const { endpoint, keys } = req.body || {};
-        const isHttps = typeof endpoint === 'string' && endpoint.startsWith('https://') && endpoint.length < 2000;
+        const isHttps = typeof endpoint === 'string' && endpoint.length < 2000 && isPushEndpoint(endpoint);
         if (!isHttps || typeof keys?.p256dh !== 'string' || typeof keys?.auth !== 'string') {
             return res.status(400).json({ message: 'Suscripción inválida' });
         }

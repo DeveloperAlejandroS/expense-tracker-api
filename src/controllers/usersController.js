@@ -1,5 +1,6 @@
 const bcrypt = require('bcrypt');
 const db = require('../db/connection');
+const { signToken } = require('./authController');
 
 const MIN_PASSWORD_LENGTH = 8;
 // ~60 KB de data URL: de sobra para 256x256, y cabe en el límite de 100 KB del body.
@@ -170,9 +171,12 @@ const changePassword = async (req, res) => {
         }
 
         const hash = await bcrypt.hash(new_password, 10);
-        await db.query('UPDATE users SET password = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [hash, req.user.id]);
+        // Todo token emitido antes de este segundo deja de valer (otros dispositivos,
+        // o alguien que lo hubiera copiado). Este dispositivo recibe uno nuevo.
+        const validAfter = new Date(Math.floor(Date.now() / 1000) * 1000);
+        await db.query('UPDATE users SET password = $1, token_valid_after = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [hash, req.user.id, validAfter]);
 
-        return res.status(200).json({ message: 'Contraseña actualizada' });
+        return res.status(200).json({ message: 'Contraseña actualizada', token: signToken(req.user) });
     } catch (error) {
         console.error('Error en changePassword:', error);
         return res.status(500).json({ message: 'Error interno del servidor' });

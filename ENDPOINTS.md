@@ -770,6 +770,30 @@ Efecto:
 
 Respuesta `200`: `{ "message": "Abono registrado", "entry": { ...deuda actualizada... }, "income_item": { ...ítem creado... } }`.
 
+## 5.3.1) Gastos que se repiten y ahorros entre meses
+
+### POST /budget/recurring
+Crea un gasto fijo que se repite. Dos formas:
+- Cada mes, sin fin: `{ label, amount, start_month? }`.
+- Compra a cuotas: `{ label, total_amount, months, start_month? }` (`months` 2–120; la cuota es `total_amount / months` y la última absorbe el redondeo).
+
+`start_month` es `YYYY-MM` (por defecto, el mes actual). No crea ítems en el momento: al pedir `GET /budget/:month` de cada mes vigente aparece **una sola vez** un ítem en `fixed_expense` con `budgeted_amount` = la cuota, `actual_amount` = 0 y `recurring_id`. Las cuotas llevan el sufijo `(cuota i/N)`. Como `actual_amount` es 0, no mueve la caja hasta que se marca pagado con `PATCH /budget/items/:id { actual_amount }`. Si se borra el ítem de un mes, no reaparece.
+
+### DELETE /budget/recurring/:id
+Deja de repetir: borra la plantilla y los ítems de meses **futuros** que sigan sin pagar. Lo del mes actual y lo ya pagado se queda. `404` si no es tuyo.
+
+### `savings_funds` en GET /budget/:month
+Lista de ahorros con nombre acumulados hasta ese mes: `[{ label, total, month_amount, item_id }]`. `item_id` es el ítem de ese mes (o `null` si el ahorro viene de un mes anterior y este mes aún no tiene movimiento). La identidad del ahorro es su nombre (sin distinguir mayúsculas): para abonar desde otro mes se crea un ítem `saving` con el mismo `label`.
+
+## 5.3.2) Seguridad (resumen)
+
+- `verifyToken` consulta al usuario en cada petición: rechaza cuentas inactivas y tokens emitidos antes del último cambio de contraseña (`users.token_valid_after`). `POST /users/me/password` devuelve un `token` nuevo para el dispositivo que hizo el cambio.
+- Todo monto debe ser un número finito con valor absoluto ≤ 1e12 (`src/utils/money.js`); todo texto del body, ≤ 300 caracteres (salvo `avatar_url` y la suscripción push).
+- Límite general de 600 peticiones cada 5 minutos por IP, además de los límites de login, búsqueda y cambio de contraseña. `trust proxy` está activo para que el límite sea por usuario real y no por la IP del proxy de Render.
+- Las solicitudes de amistad pendientes (recibidas y enviadas) no devuelven `email` ni `phone`; en `GET /expenses`, el `email` de los demás participantes solo lo ve quien pagó.
+- `mark-paid`, `confirm` y los abonos de `/libreta` y `/debts` responden `409` si otra petición idéntica ya cambió la fila (antes un doble toque duplicaba el ingreso).
+- `POST /push/subscribe` solo acepta endpoints de los servicios push de los navegadores.
+
 ## 5.4) Deudas (`/debts`)
 
 Espejo exacto de Libreta, pero en la dirección contraria: acá se itemiza lo que **tú** debés a otros (antes solo existía como el número agregado `opening_debt_balance`, sin detalle de a quién le debés ni cuánto). Todas estas rutas están protegidas con JWT.

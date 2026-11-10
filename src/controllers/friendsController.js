@@ -134,13 +134,14 @@ const getPendingRequests = async (req, res) => {
                 f.status,
                 f.created_at,
                 u.id,
-                u.email,
+                -- Correo y teléfono solo entre amigos aceptados.
+                NULL AS email,
                 u.username,
                 u.first_name,
                 u.middle_name,
                 u.last_name,
                 u.second_last_name,
-                u.phone
+                NULL AS phone
             FROM friends f
             INNER JOIN users u
                 ON u.id = f.requested_by
@@ -172,13 +173,14 @@ const getSentRequests = async (req, res) => {
                 f.status,
                 f.created_at,
                 u.id,
-                u.email,
+                -- Correo y teléfono solo entre amigos aceptados.
+                NULL AS email,
                 u.username,
                 u.first_name,
                 u.middle_name,
                 u.last_name,
                 u.second_last_name,
-                u.phone
+                NULL AS phone
             FROM friends f
             INNER JOIN users u
                 ON u.id = CASE

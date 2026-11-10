@@ -3,9 +3,13 @@ const {
     SECTIONS,
     toMonthDate,
     getOrCreateBudgetMonth,
+    currentMonthDate,
     computeMonthTotals,
+    materializeRecurring,
+    getSavingsFunds,
     recomputeForwardChainForMonth,
 } = require('../services/budgetSyncService');
+const { isMoney } = require('../utils/money');
 
 const MONTH_PARAM_REGEX = /^\d{4}-\d{2}$/;
 const SAVINGS_LINK_SECTIONS = ['fixed_expense', 'tracked_expense'];
@@ -25,7 +29,9 @@ const getMonth = async (req, res) => {
         }
 
         const budgetMonth = await getOrCreateBudgetMonth(db, userId, monthDate);
+        await materializeRecurring(db, userId, budgetMonth);
         const { sections, totals } = await computeMonthTotals(db, budgetMonth);
+        const savingsFunds = await getSavingsFunds(db, userId, budgetMonth);
 
         return res.status(200).json({
             month: budgetMonth.month,
@@ -36,6 +42,7 @@ const getMonth = async (req, res) => {
             },
             sections,
             totals,
+            savings_funds: savingsFunds,
         });
     } catch (error) {
         console.error('Error en getMonth:', error);
@@ -116,8 +123,8 @@ const createItem = async (req, res) => {
         }
         const budgeted = Number(budgetedAmount) || 0;
         const actual = Number(actualAmount) || 0;
-        if (budgeted < 0 || actual < 0) {
-            return res.status(400).json({ message: 'Los montos no pueden ser negativos' });
+        if (!isMoney(budgeted) || !isMoney(actual) || budgeted < 0 || actual < 0) {
+            return res.status(400).json({ message: 'Los montos deben ser números válidos y no negativos' });
         }
 
         let targetSavingItemId = null;
@@ -225,8 +232,8 @@ const updateItem = async (req, res) => {
         const nextBudgeted = budgetedAmount !== undefined ? Number(budgetedAmount) || 0 : Number(item.budgeted_amount);
         const nextActual = actualAmount !== undefined ? Number(actualAmount) || 0 : Number(item.actual_amount);
 
-        if (nextBudgeted < 0 || nextActual < 0) {
-            return res.status(400).json({ message: 'Los montos no pueden ser negativos' });
+        if (!isMoney(nextBudgeted) || !isMoney(nextActual) || nextBudgeted < 0 || nextActual < 0) {
+            return res.status(400).json({ message: 'Los montos deben ser números válidos y no negativos' });
         }
 
         const oldLinkedSavingItemId = item.linked_saving_item_id;
@@ -339,7 +346,7 @@ const addContribution = async (req, res) => {
         if (!Number.isInteger(itemId) || itemId <= 0) {
             return res.status(400).json({ message: 'id debe ser un entero positivo' });
         }
-        if (!Number.isFinite(amount) || amount <= 0) {
+        if (!isMoney(amount) || amount <= 0) {
             return res.status(400).json({ message: 'amount debe ser un número mayor a 0' });
         }
 
@@ -404,7 +411,7 @@ const updateOpening = async (req, res) => {
         const nextSavings = savingsBalance !== undefined ? Number(savingsBalance) : Number(budgetMonth.opening_savings_balance);
         const nextDebt = debtBalance !== undefined ? Number(debtBalance) : Number(budgetMonth.opening_debt_balance);
 
-        if ([nextCash, nextSavings, nextDebt].some((n) => !Number.isFinite(n))) {
+        if ([nextCash, nextSavings, nextDebt].some((n) => !isMoney(n))) {
             return res.status(400).json({ message: 'Los saldos deben ser números' });
         }
 
@@ -494,7 +501,106 @@ const getOpeningHistory = async (req, res) => {
     }
 };
 
+// Crea un gasto que se repite. Dos formas:
+//  - cada mes, sin fin:   { label, amount, start_month? }
+//  - compra a cuotas:     { label, total_amount, months, start_month? }
+// No crea ítems: aparecen solos al abrir cada mes (ver materializeRecurring).
+const createRecurring = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { label, amount, total_amount: totalAmount, months, start_month: startMonth } = req.body || {};
+
+        if (!label || typeof label !== 'string' || !label.trim()) {
+            return res.status(400).json({ message: 'label es requerido' });
+        }
+        const startDate = startMonth === undefined || startMonth === null ? currentMonthDate() : parseMonthParam(startMonth);
+        if (!startDate) {
+            return res.status(400).json({ message: 'start_month debe tener formato YYYY-MM' });
+        }
+
+        let monthly;
+        let total = null;
+        let count = null;
+        if (months !== undefined && months !== null) {
+            count = Number(months);
+            total = typeof totalAmount === 'object' ? NaN : Number(totalAmount);
+            if (!Number.isInteger(count) || count < 2 || count > 120) {
+                return res.status(400).json({ message: 'months debe ser un entero entre 2 y 120' });
+            }
+            if (!isMoney(total) || total <= 0) {
+                return res.status(400).json({ message: 'total_amount debe ser un número mayor a 0' });
+            }
+            // Cuotas en pesos enteros (o centavos si el total ya los trae); la última absorbe el resto.
+            const unit = Number.isInteger(total) ? 1 : 100;
+            monthly = Math.floor((total / count) * unit) / unit;
+        } else {
+            monthly = typeof amount === 'object' ? NaN : Number(amount);
+        }
+        if (!isMoney(monthly) || monthly <= 0) {
+            return res.status(400).json({ message: 'El monto debe ser un número mayor a 0' });
+        }
+
+        const created = await db.query(
+            `
+            INSERT INTO recurring_expenses (user_id, label, amount, total_amount, start_month, months_count)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id, label, amount, total_amount, start_month::text AS start_month, months_count
+            `,
+            [userId, label.trim(), monthly, total, startDate, count]
+        );
+
+        return res.status(201).json({ message: 'Gasto que se repite creado', recurring: created.rows[0] });
+    } catch (error) {
+        console.error('Error en createRecurring:', error);
+        return res.status(500).json({ message: 'Error interno del servidor' });
+    }
+};
+
+// Deja de repetir: borra la plantilla y los ítems FUTUROS que aún no se
+// pagaron. Lo de este mes y lo ya pagado se queda como está.
+const deleteRecurring = async (req, res) => {
+    const client = await db.getClient();
+    let transactionStarted = false;
+
+    try {
+        const userId = req.user.id;
+        const recurringId = Number(req.params.id);
+        if (!Number.isInteger(recurringId) || recurringId <= 0) {
+            return res.status(400).json({ message: 'id debe ser un entero positivo' });
+        }
+
+        const found = await client.query('SELECT id FROM recurring_expenses WHERE id = $1 AND user_id = $2', [recurringId, userId]);
+        if (found.rows.length === 0) {
+            return res.status(404).json({ message: 'Gasto que se repite no encontrado' });
+        }
+
+        await client.query('BEGIN');
+        transactionStarted = true;
+
+        await client.query(
+            `
+            DELETE FROM budget_items bi USING budget_months bm
+            WHERE bm.id = bi.budget_month_id AND bi.recurring_id = $1 AND bi.actual_amount = 0 AND bm.month > $2::date
+            `,
+            [recurringId, currentMonthDate()]
+        );
+        await client.query('DELETE FROM recurring_expenses WHERE id = $1', [recurringId]);
+
+        await client.query('COMMIT');
+
+        return res.status(200).json({ message: 'Ya no se repite' });
+    } catch (error) {
+        if (transactionStarted) await client.query('ROLLBACK');
+        console.error('Error en deleteRecurring:', error);
+        return res.status(500).json({ message: 'Error interno del servidor' });
+    } finally {
+        client.release();
+    }
+};
+
 module.exports = {
+    createRecurring,
+    deleteRecurring,
     getMonth,
     getOpeningHistory,
     createItem,

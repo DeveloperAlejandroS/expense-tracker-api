@@ -1,10 +1,13 @@
 const express = require('express');
 const verifyToken = require('../middleware/verifyToken');
-const { addContribution, createItem, deleteItem, getMonth, getOpeningHistory, updateItem, updateOpening } = require('../controllers/budgetController');
+const { createRecurring, deleteRecurring, addContribution, createItem, deleteItem, getMonth, getOpeningHistory, updateItem, updateOpening } = require('../controllers/budgetController');
 
 const router = express.Router();
 
 router.use(verifyToken);
+
+router.post('/recurring', createRecurring);
+router.delete('/recurring/:id', deleteRecurring);
 
 router.get('/:month', getMonth);
 router.get('/:month/opening/history', getOpeningHistory);

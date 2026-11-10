@@ -2,6 +2,7 @@ const db = require('../db/connection');
 const { splitEqually, computePayerShareFromCustomSplit } = require('../utils/splitCalculator');
 const budgetSyncService = require('../services/budgetSyncService');
 const push = require('../services/pushService');
+const { isMoney } = require('../utils/money');
 
 const getExpenseContactSuggestions = async (req, res) => {
     try {
@@ -69,15 +70,15 @@ const getAcceptedFriendIds = async (client, userId) => {
 // { error } si algo es inválido, o { amountValue, description, shares }
 // donde `shares` es un Map<userId, amount> que incluye al pagador.
 const resolveExpenseSplit = async (client, { paidBy, amount, description, splitType, participants }) => {
-    if (!amount || Number(amount) <= 0) {
+    const amountValue = amount === null || typeof amount === 'object' ? NaN : Number(amount);
+    if (!isMoney(amountValue) || amountValue <= 0) {
         return { error: { status: 400, message: 'amount debe ser un número mayor a 0' } };
     }
 
-    if (!description || typeof description !== 'string') {
+    if (!description || typeof description !== 'string' || !description.trim()) {
         return { error: { status: 400, message: 'description es requerido' } };
     }
 
-    const amountValue = Number(amount);
     const normalizedSplitType = splitType === 'custom' ? 'custom' : 'equal';
 
     if (!Array.isArray(participants)) {
@@ -99,7 +100,7 @@ const resolveExpenseSplit = async (client, { paidBy, amount, description, splitT
             if (userId === paidBy) {
                 return { error: { status: 400, message: 'No incluyas al pagador en participants; su parte se calcula automáticamente' } };
             }
-            if (!Number.isFinite(entryAmount) || entryAmount <= 0) {
+            if (!isMoney(entryAmount) || entryAmount <= 0) {
                 return { error: { status: 400, message: `El monto de participants[user_id=${userId}] debe ser mayor a 0` } };
             }
 
@@ -446,7 +447,7 @@ const getExpenses = async (req, res) => {
             participants: Array.isArray(expense.participants)
                 ? expense.participants.map((participant) => ({
                     user_id: participant.user_id,
-                    email: participant.email,
+                    email: expense.paid_by === userId || participant.user_id === userId ? participant.email : null,
                     username: participant.username,
                     first_name: participant.first_name,
                     last_name: participant.last_name,
@@ -563,7 +564,7 @@ const claimExpenseDebt = async (req, res) => {
         const remaining = Number(participant.amount_owed) - Number(participant.amount_paid);
         const claimAmount = req.body?.amount !== undefined ? Number(req.body.amount) : remaining;
 
-        if (!Number.isFinite(claimAmount) || claimAmount <= 0) {
+        if (!isMoney(claimAmount) || claimAmount <= 0) {
             return res.status(400).json({ message: 'amount debe ser un número mayor a 0' });
         }
         if (claimAmount > remaining + 0.01) {
@@ -658,7 +659,7 @@ const markParticipantPaid = async (req, res) => {
         const remaining = Number(participant.amount_owed) - Number(participant.amount_paid);
         const payAmount = req.body?.amount !== undefined ? Number(req.body.amount) : remaining;
 
-        if (!Number.isFinite(payAmount) || payAmount <= 0) {
+        if (!isMoney(payAmount) || payAmount <= 0) {
             return res.status(400).json({ message: 'amount debe ser un número mayor a 0' });
         }
         if (payAmount > remaining + 0.01) {
@@ -675,10 +676,16 @@ const markParticipantPaid = async (req, res) => {
                 pending_claim_amount = NULL,
                 confirmed_at = CASE WHEN $4 = 'paid' THEN now() ELSE confirmed_at END
             WHERE expense_id = $1 AND user_id = $2
+              AND status <> 'paid' AND amount_paid + $3 <= amount_owed + 0.01
             RETURNING id, expense_id, user_id, amount_owed, amount_paid, status, paid_claimed_at, confirmed_at
             `,
             [expenseId, debtorUserId, payAmount, isFullyPaid ? 'paid' : 'pending']
         );
+
+        // Dos toques a la vez: solo uno cambia la fila; el otro no debe sumar ingreso otra vez.
+        if (result.rows.length === 0) {
+            return res.status(409).json({ message: 'Ese pago ya se había registrado' });
+        }
 
         await budgetSyncService.onParticipantSettled(db, expenseId, debtorUserId, payAmount, isFullyPaid);
 
@@ -726,11 +733,15 @@ const confirmParticipantPayment = async (req, res) => {
                 status = $4,
                 pending_claim_amount = NULL,
                 confirmed_at = CASE WHEN $4 = 'paid' THEN now() ELSE confirmed_at END
-            WHERE expense_id = $1 AND user_id = $2
+            WHERE expense_id = $1 AND user_id = $2 AND status = 'paid_pending_confirmation'
             RETURNING id, expense_id, user_id, amount_owed, amount_paid, status, paid_claimed_at, confirmed_at
             `,
             [expenseId, debtorUserId, newAmountPaid, isFullyPaid ? 'paid' : 'pending']
         );
+
+        if (result.rows.length === 0) {
+            return res.status(409).json({ message: 'Ese pago ya se había confirmado' });
+        }
 
         await budgetSyncService.onParticipantSettled(db, expenseId, debtorUserId, claimAmount, isFullyPaid);
 

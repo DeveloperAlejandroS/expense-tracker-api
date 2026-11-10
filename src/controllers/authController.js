@@ -14,6 +14,12 @@ const MIN_PASSWORD_LENGTH = 8;
 // están registrados aunque el mensaje de error sea siempre el mismo.
 const DUMMY_HASH = bcrypt.hashSync('dummy-password-for-timing-safety', 10);
 
+const signToken = (user) => jwt.sign(
+    { id: user.id, email: user.email, username: user.username },
+    process.env.JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN }
+);
+
 const buildUserSelect = `
     id,
     email,
@@ -180,11 +186,7 @@ const login = async (req, res) => {
             return res.status(401).json({ message: 'Credenciales inválidas' });
         }
 
-        const token = jwt.sign(
-            { id: user.id, email: user.email, username: user.username },
-            process.env.JWT_SECRET,
-            { expiresIn: JWT_EXPIRES_IN }
-        );
+        const token = signToken(user);
 
         return res.status(200).json({
             message: 'Login exitoso',
@@ -209,6 +211,7 @@ const login = async (req, res) => {
 };
 
 module.exports = {
+    signToken,
     register,
     login,
 };
